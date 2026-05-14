@@ -44,16 +44,20 @@
     --anchor-x: left;          /* left | right  (via data-x no body) */
     --anchor-y: bottom;        /* top | bottom  (via data-y no body) */
     --margin: 64px;
-    --card-width: 360px;       /* largura FIXA do card — não muda com o nome da cidade */
+    --card-width: 300px;       /* largura FIXA do card — não muda com o nome da cidade */
+    --card-height: 92px;       /* altura FIXA do card — não muda com o conteúdo */
 
     --bg:        rgba(13, 15, 20, 0.72);
     --stroke:    rgba(255, 255, 255, 0.10);
     --text:      #f4f6f8;
-    --muted:     #8b95a5;
+    --muted:     #aeb7c3;     /* legendas: clareado p/ não sumir sobre fundos médios */
     --accent:    #2dd4bf;
     --accent-dim:#0f3b36;
     --warn:      #f0b429;
     --shadow:    0 20px 50px -14px rgba(0, 0, 0, 0.65);
+    /* sombra de texto: dá contraste local p/ o texto ser legível sobre
+       qualquer cena do vídeo, independente da cor do fundo */
+    --text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85), 0 0 2px rgba(0, 0, 0, 0.6);
   }
 
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -84,6 +88,7 @@
     align-items: center;
     gap: 16px;
     width: var(--card-width);   /* largura FIXA — o card não "pula" ao trocar de cidade */
+    height: var(--card-height); /* altura FIXA — não muda com meta longa, troca de face, etc. */
     padding: 14px 20px;
     background: var(--bg);
     border: 1px solid var(--stroke);
@@ -191,6 +196,7 @@
     justify-content: center;
     flex: 1;          /* ocupa o resto da largura fixa do card */
     min-width: 0;     /* permite o conteúdo encolher/clipar em vez de esticar */
+    text-shadow: var(--text-shadow);  /* herdado por eyebrow, cidade, meta e totais */
   }
 
   .eyebrow {
@@ -246,8 +252,19 @@
     color: var(--muted);
     font-weight: 500;
     display: flex; align-items: center; gap: 7px;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;    /* nunca quebra p/ 2 linhas — mantém a altura fixa */
+    overflow: hidden;
   }
+  /* o estado é o que pode ser longo: ele encolhe e corta com "…";
+     separador, "em movimento" e status ficam sempre inteiros */
+  .meta #state {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+    flex-shrink: 1;
+  }
+  .meta .sep, .meta .move, .meta .status-txt { flex-shrink: 0; }
   .meta .sep { opacity: 0.4; }
   .meta .move {
     color: var(--accent);
@@ -263,10 +280,10 @@
 
   /* --- face: totais (km / cidades / estados, lado a lado) --- */
   .face-stats { display: flex; align-items: center; }
-  .stats { display: flex; align-items: center; gap: 20px; }
+  .stats { display: flex; align-items: center; gap: 14px; }
   .stat { text-align: center; }
   .stat .num {
-    font-size: 23px;
+    font-size: var(--stat-font, 20px);  /* o JS reduz isto se os números não couberem */
     font-weight: 600;
     color: var(--text);
     line-height: 1;
@@ -274,7 +291,7 @@
     display: inline-block;       /* p/ o transform do flash funcionar */
   }
   .stat .num .unit {
-    font-size: 11px;
+    font-size: 0.52em;           /* acompanha o tamanho do número */
     color: var(--muted);
     margin-left: 2px;
   }
@@ -352,8 +369,8 @@
           </div>
 
           <!-- FACE 2: totais da viagem -->
-          <div class="face face-stats">
-            <div class="stats">
+          <div class="face face-stats" id="face-stats">
+            <div class="stats" id="stats">
               <div class="stat">
                 <div class="num"><span id="km">0</span><span class="unit">km</span></div>
                 <div class="lbl">Rodados</div>
@@ -551,6 +568,22 @@
     }
   }
 
+  // Mesma ideia para o bloco de totais: tenta no tamanho cheio e, se os
+  // números não couberem na largura do card, reduz a fonte dos três juntos.
+  // Funciona pra qualquer quantidade de dígitos (km vai crescendo na viagem).
+  const STAT_FONT_MAX = 20;
+  const STAT_FONT_MIN = 14;
+  function fitStatsText() {
+    const inner = $('stats');
+    const wrap  = $('face-stats');
+    let size = STAT_FONT_MAX;
+    inner.style.setProperty('--stat-font', size + 'px');
+    while (size > STAT_FONT_MIN && inner.offsetWidth > wrap.clientWidth) {
+      size -= 1;
+      inner.style.setProperty('--stat-font', size + 'px');
+    }
+  }
+
   // ---------- RENDER ----------
   function render(data) {
     const cityChanged = lastCity !== null && lastCity !== data.city;
@@ -577,9 +610,20 @@
       cities: Number(s.citiesVisited) || 0,
       states: Number(s.statesVisited) || 0,
     };
-    countTo($('km'),     cur.km);
-    countTo($('cities'), cur.cities);
-    countTo($('states'), cur.states);
+
+    // Ajusta a fonte ANTES de animar, medindo já com os valores FINAIS
+    // (escreve o alvo, mede/encolhe, restaura — aí o countTo anima do certo).
+    const kmEl = $('km'), citiesEl = $('cities'), statesEl = $('states');
+    const keep = [kmEl.textContent, citiesEl.textContent, statesEl.textContent];
+    kmEl.textContent     = cur.km.toLocaleString('pt-BR');
+    citiesEl.textContent = cur.cities.toLocaleString('pt-BR');
+    statesEl.textContent = cur.states.toLocaleString('pt-BR');
+    fitStatsText();
+    kmEl.textContent = keep[0]; citiesEl.textContent = keep[1]; statesEl.textContent = keep[2];
+
+    countTo(kmEl,     cur.km);
+    countTo(citiesEl, cur.cities);
+    countTo(statesEl, cur.states);
 
     // marcos: cidade/estado que SUBIU de verdade
     if (prevStats) {
@@ -660,7 +704,7 @@
   // ---------- MODO DE TESTE (dados falsos) ----------
   const MOCK_ROUTE = [
     { city: 'Londrina',      state: 'Paraná' },
-    { city: 'Santo Antonio da Patrulha de Teste',       state: 'Paraná' },
+    { city: 'Maringá',       state: 'Paraná' },
     { city: 'Cascavel',      state: 'Paraná' },
     { city: 'Foz do Iguaçu', state: 'Paraná' },
     { city: 'Florianópolis', state: 'Santa Catarina' },
@@ -722,10 +766,10 @@
       setInterval(evaluateFreshness, 15000);
     }
 
-    // a 1ª medição pode usar a fonte de fallback; quando a Bricolage
-    // Grotesque carrega, reajusta o tamanho do nome da cidade
+    // a 1ª medição pode usar a fonte de fallback; quando as fontes
+    // carregam, reajusta o tamanho do nome da cidade e dos totais
     if (document.fonts && document.fonts.ready) {
-      document.fonts.ready.then(fitCityText);
+      document.fonts.ready.then(() => { fitCityText(); fitStatsText(); });
     }
   }
   start();
