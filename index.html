@@ -44,6 +44,7 @@
     --anchor-x: left;          /* left | right  (via data-x no body) */
     --anchor-y: bottom;        /* top | bottom  (via data-y no body) */
     --margin: 64px;
+    --card-width: 360px;       /* largura FIXA do card — não muda com o nome da cidade */
 
     --bg:        rgba(13, 15, 20, 0.72);
     --stroke:    rgba(255, 255, 255, 0.10);
@@ -82,6 +83,7 @@
     display: flex;
     align-items: center;
     gap: 16px;
+    width: var(--card-width);   /* largura FIXA — o card não "pula" ao trocar de cidade */
     padding: 14px 20px;
     background: var(--bg);
     border: 1px solid var(--stroke);
@@ -187,7 +189,8 @@
     display: flex;
     flex-direction: column;
     justify-content: center;
-    min-width: 230px;
+    flex: 1;          /* ocupa o resto da largura fixa do card */
+    min-width: 0;     /* permite o conteúdo encolher/clipar em vez de esticar */
   }
 
   .eyebrow {
@@ -212,11 +215,13 @@
 
   /* As duas "faces" ocupam a MESMA célula de grid e fazem crossfade.
      Como as duas ficam sempre renderizadas, o card não muda de tamanho
-     ao alternar entre cidade e totais. */
-  .face-wrap { display: grid; }
+     ao alternar entre cidade e totais. A coluna minmax(0,1fr) trava a
+     largura da célula na do container — nome longo não estica nada. */
+  .face-wrap { display: grid; grid-template-columns: minmax(0, 1fr); }
   .face {
     grid-area: 1 / 1;
     align-self: center;
+    min-width: 0;     /* deixa o texto da cidade clipar em vez de esticar */
     transition: opacity 0.4s ease, transform 0.4s ease;
   }
   body[data-mode="city"]  .face-stats { opacity: 0; transform: translateY(8px);  pointer-events: none; }
@@ -226,11 +231,14 @@
   .city {
     font-family: 'Bricolage Grotesque', sans-serif;
     font-weight: 800;
-    font-size: 30px;
+    font-size: 30px;        /* tamanho cheio; o JS reduz se o nome não couber */
     line-height: 1.03;
     color: var(--text);
     letter-spacing: -0.02em;
     white-space: nowrap;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis; /* rede de segurança: corta com "…" se nem no menor tamanho couber */
   }
   .meta {
     margin-top: 4px;
@@ -527,6 +535,22 @@
     scheduleCycle();
   }
 
+  // Ajusta o tamanho da fonte da cidade em 3 camadas:
+  //  1) tenta no tamanho cheio (CITY_FONT_MAX)
+  //  2) se não couber na largura, reduz de 1 em 1 até CITY_FONT_MIN
+  //  3) se nem no menor couber, o CSS (text-overflow: ellipsis) corta com "…"
+  const CITY_FONT_MAX = 30;
+  const CITY_FONT_MIN = 20;
+  function fitCityText() {
+    const el = $('city');
+    let size = CITY_FONT_MAX;
+    el.style.fontSize = size + 'px';
+    while (size > CITY_FONT_MIN && el.scrollWidth > el.clientWidth) {
+      size -= 1;
+      el.style.fontSize = size + 'px';
+    }
+  }
+
   // ---------- RENDER ----------
   function render(data) {
     const cityChanged = lastCity !== null && lastCity !== data.city;
@@ -534,6 +558,7 @@
     // face: cidade
     $('city').textContent  = data.city  || '—';
     $('state').textContent = data.state || '—';
+    fitCityText();   // encolhe/corta o nome p/ caber na largura fixa
 
     const moving = typeof data.speed === 'number' && data.speed > CONFIG.moveThreshold;
     const moveEl = $('move');
@@ -635,7 +660,7 @@
   // ---------- MODO DE TESTE (dados falsos) ----------
   const MOCK_ROUTE = [
     { city: 'Londrina',      state: 'Paraná' },
-    { city: 'Maringá',       state: 'Paraná' },
+    { city: 'Santo Antonio da Patrulha de Teste',       state: 'Paraná' },
     { city: 'Cascavel',      state: 'Paraná' },
     { city: 'Foz do Iguaçu', state: 'Paraná' },
     { city: 'Florianópolis', state: 'Santa Catarina' },
@@ -695,6 +720,12 @@
       poll();
       setInterval(poll, T.poll);
       setInterval(evaluateFreshness, 15000);
+    }
+
+    // a 1ª medição pode usar a fonte de fallback; quando a Bricolage
+    // Grotesque carrega, reajusta o tamanho do nome da cidade
+    if (document.fonts && document.fonts.ready) {
+      document.fonts.ready.then(fitCityText);
     }
   }
   start();
