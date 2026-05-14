@@ -155,8 +155,10 @@
     border: 2px solid var(--accent);
     animation: ping 2.4s cubic-bezier(0, 0, 0.2, 1) infinite;
   }
-  body[data-status="stale"] .pin-core { background: #3a2f10; border-color: rgba(240,180,41,0.4); }
-  body[data-status="stale"] .pin-ring { border-color: var(--warn); animation-duration: 3.6s; }
+  body[data-status="stale"] .pin-core,
+  body[data-status="reconnecting"] .pin-core { background: #3a2f10; border-color: rgba(240,180,41,0.4); }
+  body[data-status="stale"] .pin-ring,
+  body[data-status="reconnecting"] .pin-ring { border-color: var(--warn); animation-duration: 3.6s; }
   body[data-status="offline"] .pin-ring { display: none; }
   body[data-status="offline"] .pin-core { background: #2a1416; border-color: rgba(248,113,113,0.35); }
 
@@ -185,7 +187,8 @@
     box-shadow: 0 0 8px var(--accent);
     animation: blink 1.8s ease-in-out infinite;
   }
-  body[data-status="stale"] .live-dot { background: var(--warn); box-shadow: 0 0 8px var(--warn); }
+  body[data-status="stale"] .live-dot,
+  body[data-status="reconnecting"] .live-dot { background: var(--warn); box-shadow: 0 0 8px var(--warn); }
   body[data-status="offline"] .live-dot { background: #f87171; box-shadow: none; animation: none; }
 
   .place .city {
@@ -210,7 +213,8 @@
     display: inline-flex; align-items: center; gap: 5px;
   }
   .place .meta .move svg { width: 11px; height: 11px; }
-  body[data-status="stale"] .place .meta .status-txt { color: var(--warn); }
+  body[data-status="stale"] .place .meta .status-txt,
+  body[data-status="reconnecting"] .place .meta .status-txt { color: var(--warn); }
   body[data-status="offline"] .place .meta .status-txt { color: #f87171; }
 
   /* ---------- DIVISÓRIA ---------- */
@@ -367,26 +371,51 @@
     requestAnimationFrame(tick);
   }
 
-  function setStatus(state) {
-    // state: 'live' | 'stale' | 'offline'
+  // Mostra/esconde o separador "·" conforme houver algo depois do estado
+  function updateSep() {
+    const moveVisible   = !$('move').hidden;
+    const statusVisible = !$('status-txt').hidden;
+    $('sep1').hidden = !(moveVisible || statusVisible);
+  }
+
+  // Idade legível: "agora", "há 8 min", "há 2 h"
+  function humanAge(ms) {
+    const min = Math.floor(ms / 60000);
+    if (min < 1)  return 'agora';
+    if (min < 60) return 'há ' + min + ' min';
+    const h = Math.floor(min / 60);
+    return 'há ' + h + ' h';
+  }
+
+  function setStatus(state, ageMs) {
+    // Estados:
+    //  live         -> fetch ok, dado recente
+    //  stale        -> fetch ok, mas o updatedAt já passou do staleThreshold
+    //                  (a conexão está boa; quem não atualizou foi o GPS)
+    //  reconnecting -> fetch falhou, mas ainda há um último dado bom na tela
+    //  offline      -> fetch falhou e nunca houve dado
     body.dataset.status = state;
     const txt = $('status-txt');
     const eyebrow = $('eyebrow-txt');
+
     if (state === 'live') {
       eyebrow.textContent = 'Ao vivo';
       txt.hidden = true;
-      $('sep1').hidden = false;
     } else if (state === 'stale') {
       eyebrow.textContent = 'Sinal antigo';
       txt.hidden = false;
+      // mostra HÁ QUANTO TEMPO o dado é — não "reconectando", pois a conexão está ok
+      txt.textContent = (typeof ageMs === 'number') ? humanAge(ageMs) : 'sinal antigo';
+    } else if (state === 'reconnecting') {
+      eyebrow.textContent = 'Sinal antigo';
+      txt.hidden = false;
       txt.textContent = 'reconectando…';
-      $('sep1').hidden = false;
-    } else {
+    } else { // offline
       eyebrow.textContent = 'Sem sinal';
       txt.hidden = false;
       txt.textContent = 'reconectando…';
-      $('sep1').hidden = false;
     }
+    updateSep();
   }
 
   function render(data) {
@@ -407,6 +436,7 @@
       } else {
         moveEl.hidden = true;
       }
+      updateSep(); // separador "·" depende da visibilidade do "em movimento"
 
       // estatísticas
       const s = data.stats || {};
@@ -428,11 +458,12 @@
   }
 
   function evaluateFreshness() {
-    // chamado mesmo sem fetch novo, p/ marcar dados antigos
+    // chamado mesmo sem fetch novo, p/ ir marcando o dado como antigo
     if (!lastGood || !lastGood.updatedAt) return;
+    // não mexe se o último fetch falhou — esses estados têm prioridade
+    if (body.dataset.status === 'reconnecting' || body.dataset.status === 'offline') return;
     const age = Date.now() - new Date(lastGood.updatedAt).getTime();
-    if (body.dataset.status === 'offline') return; // offline tem prioridade
-    setStatus(age > CONFIG.staleThreshold ? 'stale' : 'live');
+    setStatus(age > CONFIG.staleThreshold ? 'stale' : 'live', age);
   }
 
   // Monta a URL final: API + cache-bust, opcionalmente embrulhada no proxy CORS.
@@ -486,15 +517,15 @@
 
       render(data);
 
-      // status conforme a idade do updatedAt
+      // status conforme a idade do updatedAt (fetch deu certo aqui)
       const age = data.updatedAt ? Date.now() - new Date(data.updatedAt).getTime() : 0;
-      setStatus(age > CONFIG.staleThreshold ? 'stale' : 'live');
+      setStatus(age > CONFIG.staleThreshold ? 'stale' : 'live', age);
 
     } catch (err) {
       clearTimeout(timer);
       console.warn('[overlay] falha ao consultar API:', err.message);
-      // mantém o último dado bom na tela — só muda o indicador
-      if (lastGood) setStatus('stale');
+      // o fetch falhou: mantém o último dado bom na tela e sinaliza reconexão
+      if (lastGood) setStatus('reconnecting');
       else setStatus('offline');
     }
   }
