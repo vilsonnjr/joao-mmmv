@@ -1,46 +1,37 @@
 <!--
   OVERLAY DE LOCALIZAÇÃO PARA OBS  ·  Browser Source
   ----------------------------------------------------
-  >>> ESTE OVERLAY PRECISA SER HOSPEDADO NO GITHUB PAGES <<<
-  Não funciona abrindo o arquivo direto (file://), porque o proxy de
-  CORS usado (corsproxy.io) só aceita requisições vindas de origens
-  conhecidas — e *.github.io está na lista dele.
+  >>> MODO DE TESTE LIGADO <<<
+  No momento o CONFIG.mock.enabled está TRUE: o overlay gera dados
+  falsos sozinho (sem API, sem proxy), pra você testar abrindo o
+  arquivo direto no navegador (clique duplo) e ver as animações.
+  ANTES DE SUBIR PRO GITHUB PAGES, mude CONFIG.mock.enabled para FALSE.
 
-  PASSO A PASSO — hospedar no GitHub Pages:
+  ----------------------------------------------------
+  HOSPEDAR NO GITHUB PAGES (modo de produção, mock.enabled = false):
    1. Renomeie este arquivo para  index.html
    2. No GitHub, crie um repositório novo (público), ex.: overlay-live
-   3. Faça upload do index.html (botão "Add file" -> "Upload files",
-      ou via git push — tanto faz)
-   4. No repositório: Settings -> Pages
+   3. Faça upload do index.html (Add file -> Upload files, ou git push)
+   4. Repositório -> Settings -> Pages
       - Source: "Deploy from a branch"
       - Branch: main  /  pasta: / (root)  -> Save
    5. Aguarde ~1 min. A URL fica:
         https://SEU-USUARIO.github.io/overlay-live/
-   6. No OBS: Fontes -> + -> Navegador -> "URL" (não "arquivo local")
+   6. No OBS: Fontes -> + -> Navegador -> campo "URL" (não "arquivo local")
       -> cole a URL acima -> Largura 1920, Altura 1080
 
-  Como atualizar depois: edite o index.html e suba de novo (commit).
-  O GitHub Pages republica sozinho em ~1 min.
+  Em produção precisa ser GitHub Pages porque o proxy de CORS usado
+  (corsproxy.io) só aceita requisições de origens conhecidas — e
+  *.github.io está na lista dele. Abrir o arquivo direto (file://) só
+  funciona no MODO DE TESTE, que não usa o proxy.
 
-  Ajustes rápidos no bloco CONFIG (logo no início do <script>):
-   - apiUrl ........ endpoint da sua API
-   - corsProxy ..... proxy CORS usado (corsproxy.io)
-   - pollInterval .. de quanto em quanto tempo consultar (ms)
-   - staleThreshold  a partir de quando os dados são considerados "antigos"
-
-  CORS — usando o corsproxy.io:
-   O navegador do OBS bloqueia o fetch direto na mmmv.com.br (sem header
-   CORS). A requisição passa por https://corsproxy.io/?url=..., que devolve
-   a resposta já com Access-Control-Allow-Origin: *. O corsproxy.io grátis
-   exige que a origem da página esteja na lista dele — por isso o overlay
-   roda no GitHub Pages (origem *.github.io, que ele aceita).
-
-   Proxies que NÃO funcionam via fetch() (já testados):
-    - everyOrigin (Vercel): bloqueia fetch() com 403 (proteção anti-bot).
-    - file:// direto no corsproxy.io: origem "null", recusada.
-
-   O cache-bust (_t=) vai DENTRO da URL da sua API, então o proxy também
-   não serve resposta velha do cache dele.
+  Ajustes no bloco CONFIG (início do <script>):
+   - apiUrl / corsProxy ... API e proxy
+   - pollInterval ......... de quanto em quanto tempo consulta a API
+   - staleThreshold ....... idade do dado p/ virar "sinal antigo"
+   - moveThreshold ........ speed acima disso => "em movimento"
+   - statsEvery / statsDuration ... rotação do painel cidade <-> totais
+   - mock ................. modo de teste (dados falsos locais)
 -->
 <meta charset="utf-8" />
 <title>Overlay de Localização</title>
@@ -50,20 +41,18 @@
 
 <style>
   :root {
-    /* Onde o card fica ancorado na tela */
-    --anchor-x: left;          /* left | right */
-    --anchor-y: bottom;        /* top | bottom */
+    --anchor-x: left;          /* left | right  (via data-x no body) */
+    --anchor-y: bottom;        /* top | bottom  (via data-y no body) */
     --margin: 64px;
 
     --bg:        rgba(13, 15, 20, 0.72);
-    --bg-solid:  #0d0f14;
     --stroke:    rgba(255, 255, 255, 0.10);
     --text:      #f4f6f8;
     --muted:     #8b95a5;
     --accent:    #2dd4bf;
     --accent-dim:#0f3b36;
     --warn:      #f0b429;
-    --shadow:    0 24px 60px -12px rgba(0, 0, 0, 0.65);
+    --shadow:    0 20px 50px -14px rgba(0, 0, 0, 0.65);
   }
 
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -76,7 +65,6 @@
     -webkit-font-smoothing: antialiased;
   }
 
-  /* Posicionamento no canto escolhido */
   #wrap {
     position: fixed;
     inset: 0;
@@ -88,26 +76,26 @@
   body[data-y="top"]    #wrap { align-items: flex-start; }
   body[data-y="bottom"] #wrap { align-items: flex-end; }
 
-  /* ---------- O CARD ---------- */
+  /* ---------- O CARD (mais compacto) ---------- */
   .card {
     position: relative;
     display: flex;
-    align-items: stretch;
-    gap: 22px;
-    padding: 20px 26px;
+    align-items: center;
+    gap: 16px;
+    padding: 14px 20px;
     background: var(--bg);
     border: 1px solid var(--stroke);
-    border-radius: 18px;
+    border-radius: 16px;
     box-shadow: var(--shadow);
     backdrop-filter: blur(20px) saturate(140%);
     -webkit-backdrop-filter: blur(20px) saturate(140%);
     overflow: hidden;
     opacity: 0;
-    transform: translateY(24px);
+    transform: translateY(20px);
     animation: cardIn 0.9s cubic-bezier(0.16, 1, 0.3, 1) 0.1s forwards;
   }
 
-  /* Linha de acento que "varre" o topo do card */
+  /* linha de acento que "varre" o topo do card */
   .card::before {
     content: "";
     position: absolute;
@@ -116,8 +104,8 @@
     background: linear-gradient(90deg, transparent, var(--accent), transparent);
     opacity: 0.9;
     animation: sweep 6s ease-in-out infinite;
+    z-index: 2;
   }
-
   /* textura sutil de granulado */
   .card::after {
     content: "";
@@ -125,20 +113,51 @@
     inset: 0;
     pointer-events: none;
     opacity: 0.4;
+    z-index: 2;
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.025'/%3E%3C/svg%3E");
   }
 
-  /* ---------- BLOCO DO PIN ---------- */
+  /* camada de FLASH (pisca no card quando muda a cidade) */
+  .flash-layer {
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    opacity: 0;
+    z-index: 0;   /* atrás do conteúdo, faz um brilho ao redor */
+    background: radial-gradient(120% 150% at 26% 50%,
+                rgba(45, 212, 191, 0.5), transparent 62%);
+  }
+  .flash-layer.go { animation: flashPulse 0.8s ease-out; }
+
+  /* etiqueta "MODO TESTE" — só aparece com mock ligado */
+  .mock-tag {
+    position: absolute;
+    top: 6px; right: 10px;
+    font-size: 8px;
+    letter-spacing: 0.18em;
+    font-weight: 600;
+    color: var(--warn);
+    border: 1px solid rgba(240, 180, 41, 0.45);
+    border-radius: 4px;
+    padding: 2px 5px;
+    z-index: 5;
+    display: none;
+  }
+  body[data-mock="on"] .mock-tag { display: block; }
+
+  /* ---------- BLOCO DO PIN (menor) ---------- */
   .pin {
+    position: relative;
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 58px;
+    width: 44px;
     flex-shrink: 0;
-    position: relative;
+    z-index: 1;
   }
   .pin-core {
-    width: 46px; height: 46px;
+    width: 38px; height: 38px;
     border-radius: 50%;
     background: var(--accent-dim);
     border: 1px solid rgba(45, 212, 191, 0.4);
@@ -146,11 +165,10 @@
     position: relative;
     z-index: 2;
   }
-  .pin-core svg { width: 22px; height: 22px; }
-  /* anel pulsante de "ao vivo" */
+  .pin-core svg { width: 18px; height: 18px; }
   .pin-ring {
     position: absolute;
-    width: 46px; height: 46px;
+    width: 38px; height: 38px;
     border-radius: 50%;
     border: 2px solid var(--accent);
     animation: ping 2.4s cubic-bezier(0, 0, 0.2, 1) infinite;
@@ -162,23 +180,23 @@
   body[data-status="offline"] .pin-ring { display: none; }
   body[data-status="offline"] .pin-core { background: #2a1416; border-color: rgba(248,113,113,0.35); }
 
-  /* ---------- BLOCO PRINCIPAL (cidade) ---------- */
+  /* ---------- BLOCO PRINCIPAL ---------- */
   .place {
+    position: relative;
+    z-index: 1;
     display: flex;
     flex-direction: column;
     justify-content: center;
     min-width: 230px;
-    transition: opacity 0.35s ease, transform 0.35s ease;
   }
-  .place.swapping { opacity: 0; transform: translateY(-6px); }
 
-  .place .eyebrow {
-    font-size: 10px;
-    letter-spacing: 0.28em;
+  .eyebrow {
+    font-size: 9px;
+    letter-spacing: 0.26em;
     text-transform: uppercase;
     color: var(--accent);
     font-weight: 600;
-    margin-bottom: 3px;
+    margin-bottom: 4px;
     display: flex; align-items: center; gap: 7px;
   }
   .live-dot {
@@ -186,100 +204,111 @@
     background: var(--accent);
     box-shadow: 0 0 8px var(--accent);
     animation: blink 1.8s ease-in-out infinite;
+    flex-shrink: 0;
   }
   body[data-status="stale"] .live-dot,
   body[data-status="reconnecting"] .live-dot { background: var(--warn); box-shadow: 0 0 8px var(--warn); }
   body[data-status="offline"] .live-dot { background: #f87171; box-shadow: none; animation: none; }
 
-  .place .city {
+  /* As duas "faces" ocupam a MESMA célula de grid e fazem crossfade.
+     Como as duas ficam sempre renderizadas, o card não muda de tamanho
+     ao alternar entre cidade e totais. */
+  .face-wrap { display: grid; }
+  .face {
+    grid-area: 1 / 1;
+    align-self: center;
+    transition: opacity 0.4s ease, transform 0.4s ease;
+  }
+  body[data-mode="city"]  .face-stats { opacity: 0; transform: translateY(8px);  pointer-events: none; }
+  body[data-mode="stats"] .face-city  { opacity: 0; transform: translateY(-8px); pointer-events: none; }
+
+  /* --- face: cidade --- */
+  .city {
     font-family: 'Bricolage Grotesque', sans-serif;
     font-weight: 800;
-    font-size: 38px;
-    line-height: 1.02;
+    font-size: 30px;
+    line-height: 1.03;
     color: var(--text);
     letter-spacing: -0.02em;
+    white-space: nowrap;
   }
-  .place .meta {
-    margin-top: 5px;
-    font-size: 12px;
+  .meta {
+    margin-top: 4px;
+    font-size: 11px;
     color: var(--muted);
     font-weight: 500;
-    display: flex; align-items: center; gap: 8px;
+    display: flex; align-items: center; gap: 7px;
     flex-wrap: wrap;
   }
-  .place .meta .sep { opacity: 0.4; }
-  .place .meta .move {
+  .meta .sep { opacity: 0.4; }
+  .meta .move {
     color: var(--accent);
     display: inline-flex; align-items: center; gap: 5px;
   }
-  /* o display:inline-flex acima sobrepõe o [hidden] padrão do navegador;
+  /* o display:inline-flex sobrepõe o [hidden] padrão do navegador;
      esta regra devolve o comportamento de esconder quando hidden é setado */
-  .place .meta .move[hidden] { display: none; }
-  .place .meta .move svg { width: 11px; height: 11px; }
-  body[data-status="stale"] .place .meta .status-txt,
-  body[data-status="reconnecting"] .place .meta .status-txt { color: var(--warn); }
-  body[data-status="offline"] .place .meta .status-txt { color: #f87171; }
+  .meta .move[hidden] { display: none; }
+  .meta .move svg { width: 10px; height: 10px; }
+  body[data-status="stale"] .meta .status-txt,
+  body[data-status="reconnecting"] .meta .status-txt { color: var(--warn); }
+  body[data-status="offline"] .meta .status-txt { color: #f87171; }
 
-  /* ---------- DIVISÓRIA ---------- */
-  .divider {
-    width: 1px;
-    background: linear-gradient(180deg, transparent, var(--stroke) 20%, var(--stroke) 80%, transparent);
-    flex-shrink: 0;
-  }
-
-  /* ---------- ESTATÍSTICAS ---------- */
-  .stats {
-    display: flex;
-    align-items: center;
-    gap: 24px;
-    padding-right: 4px;
-  }
+  /* --- face: totais (km / cidades / estados, lado a lado) --- */
+  .face-stats { display: flex; align-items: center; }
+  .stats { display: flex; align-items: center; gap: 20px; }
   .stat { text-align: center; }
   .stat .num {
-    font-size: 26px;
+    font-size: 23px;
     font-weight: 600;
     color: var(--text);
     line-height: 1;
     font-variant-numeric: tabular-nums;
+    display: inline-block;       /* p/ o transform do flash funcionar */
   }
   .stat .num .unit {
-    font-size: 12px;
+    font-size: 11px;
     color: var(--muted);
     margin-left: 2px;
   }
   .stat .lbl {
-    margin-top: 6px;
-    font-size: 9px;
-    letter-spacing: 0.18em;
+    margin-top: 5px;
+    font-size: 8px;
+    letter-spacing: 0.16em;
     text-transform: uppercase;
     color: var(--muted);
   }
+  /* flash de marco: o número que subiu dá um "pulo" colorido */
+  .stat .num.pulse { animation: statPulse 0.9s cubic-bezier(.36,.07,.19,.97); }
 
-  /* itens entram escalonados */
+  /* entrada escalonada */
   .stagger { opacity: 0; animation: itemIn 0.6s ease forwards; }
-  .card .pin    { animation-delay: 0.35s; }
-  .card .place  { animation-delay: 0.45s; }
-  .card .divider{ animation-delay: 0.5s;  }
-  .card .stat:nth-child(1) { animation-delay: 0.55s; }
-  .card .stat:nth-child(2) { animation-delay: 0.62s; }
-  .card .stat:nth-child(3) { animation-delay: 0.69s; }
+  .card .pin   { animation-delay: 0.35s; }
+  .card .place { animation-delay: 0.45s; }
 
-  @keyframes cardIn   { to { opacity: 1; transform: translateY(0); } }
-  @keyframes itemIn   { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-  @keyframes ping     { 0% { transform: scale(1); opacity: 0.7; } 80%,100% { transform: scale(1.7); opacity: 0; } }
-  @keyframes blink    { 0%,100% { opacity: 1; } 50% { opacity: 0.25; } }
-  @keyframes sweep    { 0%,100% { opacity: 0.15; } 50% { opacity: 0.9; } }
+  @keyframes cardIn    { to { opacity: 1; transform: translateY(0); } }
+  @keyframes itemIn    { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes ping      { 0% { transform: scale(1); opacity: 0.7; } 80%,100% { transform: scale(1.7); opacity: 0; } }
+  @keyframes blink     { 0%,100% { opacity: 1; } 50% { opacity: 0.25; } }
+  @keyframes sweep     { 0%,100% { opacity: 0.15; } 50% { opacity: 0.9; } }
+  @keyframes flashPulse{ 0% { opacity: 0; } 18% { opacity: 1; } 100% { opacity: 0; } }
+  @keyframes statPulse {
+    0%   { transform: scale(1);    color: var(--text); }
+    35%  { transform: scale(1.24); color: var(--accent); }
+    100% { transform: scale(1);    color: var(--text); }
+  }
 
-  /* respeita usuários que reduzem movimento */
+  /* respeita quem reduz movimento no sistema */
   @media (prefers-reduced-motion: reduce) {
-    * { animation: none !important; }
+    * { animation: none !important; transition: none !important; }
     .card, .stagger { opacity: 1 !important; transform: none !important; }
   }
 </style>
 
-<body data-x="left" data-y="bottom" data-status="loading">
+<body data-x="left" data-y="bottom" data-status="loading" data-mode="city">
   <div id="wrap">
     <div class="card" id="card">
+      <div class="flash-layer" id="flash-layer"></div>
+      <div class="mock-tag">MODO TESTE</div>
 
       <div class="pin stagger">
         <div class="pin-ring"></div>
@@ -292,35 +321,45 @@
         </div>
       </div>
 
-      <div class="place stagger" id="place">
-        <div class="eyebrow"><span class="live-dot"></span> <span id="eyebrow-txt">Ao vivo</span></div>
-        <div class="city" id="city">Localizando…</div>
-        <div class="meta">
-          <span id="state">—</span>
-          <span class="sep" id="sep1">·</span>
-          <span class="move" id="move" hidden>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
-                 stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
-            <span id="move-txt">em movimento</span>
-          </span>
-          <span class="status-txt" id="status-txt" hidden></span>
+      <div class="place stagger">
+        <div class="eyebrow">
+          <span class="live-dot"></span>
+          <span id="eyebrow-txt">Ao vivo</span>
         </div>
-      </div>
 
-      <div class="divider stagger"></div>
+        <div class="face-wrap">
+          <!-- FACE 1: cidade atual -->
+          <div class="face face-city">
+            <div class="city" id="city">Localizando…</div>
+            <div class="meta">
+              <span id="state">—</span>
+              <span class="sep" id="sep1">·</span>
+              <span class="move" id="move" hidden>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+                     stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+                <span id="move-txt">em movimento</span>
+              </span>
+              <span class="status-txt" id="status-txt" hidden></span>
+            </div>
+          </div>
 
-      <div class="stats">
-        <div class="stat stagger">
-          <div class="num"><span id="km">0</span><span class="unit">km</span></div>
-          <div class="lbl">Rodados</div>
-        </div>
-        <div class="stat stagger">
-          <div class="num" id="cities">0</div>
-          <div class="lbl">Cidades</div>
-        </div>
-        <div class="stat stagger">
-          <div class="num" id="states">0</div>
-          <div class="lbl">Estados</div>
+          <!-- FACE 2: totais da viagem -->
+          <div class="face face-stats">
+            <div class="stats">
+              <div class="stat">
+                <div class="num"><span id="km">0</span><span class="unit">km</span></div>
+                <div class="lbl">Rodados</div>
+              </div>
+              <div class="stat">
+                <div class="num" id="cities">0</div>
+                <div class="lbl">Cidades</div>
+              </div>
+              <div class="stat">
+                <div class="num" id="states">0</div>
+                <div class="lbl">Estados</div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -331,34 +370,54 @@
   // ======================= CONFIG =======================
   const CONFIG = {
     apiUrl:         'https://www.mmmv.com.br/api/location',
-    // Proxy CORS. A URL final é montada sozinha (proxy + URL da API).
-    // Deixe '' (string vazia) p/ chamar a API direto.
-    //
-    // IMPORTANTE: o corsproxy.io (grátis) SÓ aceita requisições vindas
-    // de origens da lista dele (localhost, *.github.io, etc). Por isso
-    // este overlay PRECISA ser hospedado no GitHub Pages — abrir o
-    // arquivo direto (file://) NÃO funciona, dá erro de origem.
-    //
-    // O parser (extractData) entende: corsproxy.io e allorigins /raw
-    // (conteúdo cru), allorigins /get (embrulhado) e a API direta.
+    // Proxy CORS (a URL final é montada sozinha: proxy + URL da API).
+    // O corsproxy.io grátis só aceita origem da lista dele -> por isso
+    // o overlay roda no GitHub Pages em produção. Deixe '' p/ chamar
+    // a API direto. O parser entende corsproxy.io, allorigins e direto.
     corsProxy:      'https://corsproxy.io/?url=',
-    pollInterval:   60000,   // consulta a cada 1 min
+    pollInterval:   60000,   // consulta a API a cada 1 min
     fetchTimeout:   20000,   // aborta a requisição depois de 20s
-    staleThreshold: 900000,  // dados com +15min => "sinal antigo"
+    staleThreshold: 900000,  // dado com +15min => "sinal antigo"
     moveThreshold:  15,      // speed acima disso => "em movimento"
+
+    // Rotação do painel central (modo de produção):
+    statsEvery:     60000,   // mostra os totais 1x por minuto...
+    statsDuration:  10000,   // ...e eles ficam 10s na tela
+
+    // ----- MODO DE TESTE -----
+    // Com enabled:true o overlay NÃO usa API/proxy: ele inventa uma
+    // viagem fake pra você ver as animações abrindo o arquivo direto.
+    // >>> Volte para FALSE antes de subir pro GitHub Pages. <<<
+    mock: {
+      enabled:        false,
+      dataInterval:   4000,  // gera um "novo dado" a cada 4s
+      cityEveryTicks: 3,     // muda de cidade a cada 3 ticks (= 12s)
+      statsEvery:     7000,  // tempos curtos p/ ver a rotação rápido
+      statsDuration:  3500,
+    },
   };
   // =======================================================
+
+  // Tempos efetivos: no modo de teste, usa os tempos curtos do mock.
+  const T = CONFIG.mock.enabled
+    ? { poll: CONFIG.mock.dataInterval,
+        statsEvery: CONFIG.mock.statsEvery,
+        statsDuration: CONFIG.mock.statsDuration }
+    : { poll: CONFIG.pollInterval,
+        statsEvery: CONFIG.statsEvery,
+        statsDuration: CONFIG.statsDuration };
 
   const $ = (id) => document.getElementById(id);
   const body = document.body;
 
-  let lastGood = null;        // último dado válido recebido
-  let lastCity = null;        // p/ detectar troca de cidade
-  let kmShown  = 0;           // valor atual exibido (p/ animar contagem)
-
-  const BUSSOLA = ['N','NE','L','SE','S','SO','O','NO'];
-  const bussola = (deg) =>
-    (deg === null || deg === undefined) ? null : BUSSOLA[Math.round(deg / 45) % 8];
+  // ---- estado interno ----
+  let lastGood   = null;       // último dado válido
+  let lastCity   = null;       // p/ detectar troca de cidade
+  let prevStats  = null;       // p/ detectar marcos (nova cidade/estado)
+  let panelMode  = 'city';     // 'city' | 'stats'
+  let statsHideTimer = null;   // timeout que esconde os totais
+  let cycleTimer     = null;   // timeout que dispara os totais
+  const pendingFlash = { cities: false, states: false }; // marcos a piscar
 
   // Anima a contagem de um número até o alvo
   function countTo(el, target, dur = 800) {
@@ -374,6 +433,14 @@
     requestAnimationFrame(tick);
   }
 
+  // Idade legível: "agora", "há 8 min", "há 2 h"
+  function humanAge(ms) {
+    const min = Math.floor(ms / 60000);
+    if (min < 1)  return 'agora';
+    if (min < 60) return 'há ' + min + ' min';
+    return 'há ' + Math.floor(min / 60) + ' h';
+  }
+
   // Mostra/esconde o separador "·" conforme houver algo depois do estado
   function updateSep() {
     const moveVisible   = !$('move').hidden;
@@ -381,127 +448,167 @@
     $('sep1').hidden = !(moveVisible || statusVisible);
   }
 
-  // Idade legível: "agora", "há 8 min", "há 2 h"
-  function humanAge(ms) {
-    const min = Math.floor(ms / 60000);
-    if (min < 1)  return 'agora';
-    if (min < 60) return 'há ' + min + ' min';
-    const h = Math.floor(min / 60);
-    return 'há ' + h + ' h';
+  // O texto do "eyebrow" depende do status E do modo do painel.
+  // Quando há problema de conexão, o status sempre vence o rótulo de modo.
+  function refreshEyebrow() {
+    const status = body.dataset.status;
+    const el = $('eyebrow-txt');
+    if (status === 'stale' || status === 'reconnecting') el.textContent = 'Sinal antigo';
+    else if (status === 'offline')                       el.textContent = 'Sem sinal';
+    else el.textContent = (panelMode === 'stats') ? 'Na viagem' : 'Ao vivo';
   }
 
   function setStatus(state, ageMs) {
-    // Estados:
-    //  live         -> fetch ok, dado recente
-    //  stale        -> fetch ok, mas o updatedAt já passou do staleThreshold
-    //                  (a conexão está boa; quem não atualizou foi o GPS)
-    //  reconnecting -> fetch falhou, mas ainda há um último dado bom na tela
-    //  offline      -> fetch falhou e nunca houve dado
+    // live | stale | reconnecting | offline
     body.dataset.status = state;
     const txt = $('status-txt');
-    const eyebrow = $('eyebrow-txt');
-
     if (state === 'live') {
-      eyebrow.textContent = 'Ao vivo';
       txt.hidden = true;
     } else if (state === 'stale') {
-      eyebrow.textContent = 'Sinal antigo';
       txt.hidden = false;
-      // mostra HÁ QUANTO TEMPO o dado é — não "reconectando", pois a conexão está ok
+      // conexão ok, dado é que está velho -> mostra a idade, não "reconectando"
       txt.textContent = (typeof ageMs === 'number') ? humanAge(ageMs) : 'sinal antigo';
-    } else if (state === 'reconnecting') {
-      eyebrow.textContent = 'Sinal antigo';
-      txt.hidden = false;
-      txt.textContent = 'reconectando…';
-    } else { // offline
-      eyebrow.textContent = 'Sem sinal';
+    } else { // reconnecting | offline -> o fetch falhou
       txt.hidden = false;
       txt.textContent = 'reconectando…';
     }
+    refreshEyebrow();
     updateSep();
   }
 
+  // ---------- FLASHES ----------
+  function flashCard() {
+    const layer = $('flash-layer');
+    layer.classList.remove('go');
+    void layer.offsetWidth;          // força reflow p/ poder reanimar
+    layer.classList.add('go');
+  }
+  function flashStat(numEl) {
+    numEl.classList.remove('pulse');
+    void numEl.offsetWidth;
+    numEl.classList.add('pulse');
+  }
+
+  // ---------- ROTAÇÃO DO PAINEL ----------
+  function applyMode() {
+    body.dataset.mode = panelMode;   // o CSS faz o crossfade das faces
+    refreshEyebrow();
+  }
+  function showStats() {
+    if (panelMode === 'stats') return;
+    panelMode = 'stats';
+    applyMode();
+    // dispara os flashes de marco que ficaram pendentes
+    if (pendingFlash.cities) { flashStat($('cities')); pendingFlash.cities = false; }
+    if (pendingFlash.states) { flashStat($('states')); pendingFlash.states = false; }
+    clearTimeout(statsHideTimer);
+    statsHideTimer = setTimeout(showCity, T.statsDuration);
+  }
+  function showCity() {
+    if (panelMode === 'city') return;
+    panelMode = 'city';
+    applyMode();
+  }
+  // ciclo: depois de statsEvery mostra os totais; repete a cada
+  // statsEvery + statsDuration (= tempo de cidade + tempo de totais)
+  function scheduleCycle() {
+    clearTimeout(cycleTimer);
+    cycleTimer = setTimeout(function trigger() {
+      showStats();
+      cycleTimer = setTimeout(trigger, T.statsEvery + T.statsDuration);
+    }, T.statsEvery);
+  }
+  // troca de cidade tem prioridade: corta os totais, volta pra cidade,
+  // pisca o card e reinicia o ciclo do zero
+  function forceCityNow() {
+    clearTimeout(statsHideTimer);
+    showCity();
+    flashCard();
+    scheduleCycle();
+  }
+
+  // ---------- RENDER ----------
   function render(data) {
     const cityChanged = lastCity !== null && lastCity !== data.city;
-    const place = $('place');
 
-    const paint = () => {
-      $('city').textContent  = data.city  || '—';
-      $('state').textContent = data.state || '—';
+    // face: cidade
+    $('city').textContent  = data.city  || '—';
+    $('state').textContent = data.state || '—';
 
-      // movimento + direção
-      const moving = typeof data.speed === 'number' && data.speed > CONFIG.moveThreshold;
-      const dir = bussola(data.heading);
-      const moveEl = $('move');
-      if (moving) {
-        moveEl.hidden = false;
-        $('move-txt').textContent = dir ? `seguindo p/ ${dir}` : 'em movimento';
-      } else {
-        moveEl.hidden = true;
-      }
-      updateSep(); // separador "·" depende da visibilidade do "em movimento"
-
-      // estatísticas
-      const s = data.stats || {};
-      countTo($('km'),     Number(s.kmDriven)      || 0);
-      countTo($('cities'), Number(s.citiesVisited) || 0);
-      countTo($('states'), Number(s.statesVisited) || 0);
-    };
-
-    if (cityChanged) {
-      // fade-out, troca o conteúdo, fade-in
-      place.classList.add('swapping');
-      setTimeout(() => { paint(); place.classList.remove('swapping'); }, 350);
+    const moving = typeof data.speed === 'number' && data.speed > CONFIG.moveThreshold;
+    const moveEl = $('move');
+    if (moving) {
+      moveEl.hidden = false;
+      $('move-txt').textContent = 'em movimento';
     } else {
-      paint();
+      moveEl.hidden = true;
     }
+    updateSep();
+
+    // face: totais
+    const s = data.stats || {};
+    const cur = {
+      km:     Number(s.kmDriven)      || 0,
+      cities: Number(s.citiesVisited) || 0,
+      states: Number(s.statesVisited) || 0,
+    };
+    countTo($('km'),     cur.km);
+    countTo($('cities'), cur.cities);
+    countTo($('states'), cur.states);
+
+    // marcos: cidade/estado que SUBIU de verdade
+    if (prevStats) {
+      const cityMilestone  = cur.cities > prevStats.cities;
+      const stateMilestone = cur.states > prevStats.states;
+      // se a cidade também mudou, deixa o flash pendente (vamos pro modo cidade);
+      // senão e os totais já estão na tela, pisca na hora
+      if (cityMilestone) {
+        if (!cityChanged && panelMode === 'stats') flashStat($('cities'));
+        else pendingFlash.cities = true;
+      }
+      if (stateMilestone) {
+        if (!cityChanged && panelMode === 'stats') flashStat($('states'));
+        else pendingFlash.states = true;
+      }
+    }
+    prevStats = cur;
+
+    // troca de cidade -> prioridade total
+    if (cityChanged) forceCityNow();
 
     lastCity = data.city;
     lastGood = data;
   }
 
   function evaluateFreshness() {
-    // chamado mesmo sem fetch novo, p/ ir marcando o dado como antigo
     if (!lastGood || !lastGood.updatedAt) return;
-    // não mexe se o último fetch falhou — esses estados têm prioridade
     if (body.dataset.status === 'reconnecting' || body.dataset.status === 'offline') return;
     const age = Date.now() - new Date(lastGood.updatedAt).getTime();
     setStatus(age > CONFIG.staleThreshold ? 'stale' : 'live', age);
   }
 
-  // Monta a URL final: API + cache-bust, opcionalmente embrulhada no proxy CORS.
-  // O _t= vai DENTRO da URL da API, então o proxy também não serve cache velho.
+  // ---------- BUSCA NA API (modo de produção) ----------
   function buildUrl() {
     const target = CONFIG.apiUrl
       + (CONFIG.apiUrl.includes('?') ? '&' : '?')
-      + '_t=' + Date.now();
+      + '_t=' + Date.now();              // cache-bust dentro da URL da API
     if (!CONFIG.corsProxy) return target;
     return CONFIG.corsProxy + encodeURIComponent(target);
   }
 
   // Desembrulha a resposta seja qual for o proxy:
-  //  - everyOrigin -> { html: "<json da api como string>" }
-  //  - allorigins /get -> { contents: "<json da api como string>" }
-  //  - allorigins /raw ou API direta -> já é o JSON da localização
+  //  - corsproxy.io / allorigins /raw / API direta -> já é o JSON
+  //  - allorigins /get -> { contents: "<json>" }
+  //  - everyOrigin     -> { html: "<json>" }
   function extractData(text) {
     let parsed;
-    try {
-      parsed = JSON.parse(text);
-    } catch (e) {
-      throw new Error('resposta não é JSON');
-    }
-    // se já tem cara de dado de localização, usa direto
-    if (parsed && (parsed.city !== undefined || parsed.lat !== undefined)) {
-      return parsed;
-    }
-    // senão, procura o conteúdo embrulhado e parseia de novo
+    try { parsed = JSON.parse(text); }
+    catch (e) { throw new Error('resposta não é JSON'); }
+    if (parsed && (parsed.city !== undefined || parsed.lat !== undefined)) return parsed;
     const inner = parsed && (parsed.html ?? parsed.contents);
     if (typeof inner === 'string') {
-      try {
-        return JSON.parse(inner);
-      } catch (e) {
-        throw new Error('conteúdo do proxy não é JSON válido');
-      }
+      try { return JSON.parse(inner); }
+      catch (e) { throw new Error('conteúdo do proxy não é JSON válido'); }
     }
     throw new Error('formato de resposta não reconhecido');
   }
@@ -513,29 +620,83 @@
       const res = await fetch(buildUrl(), { signal: ctrl.signal, cache: 'no-store' });
       clearTimeout(timer);
       if (!res.ok) throw new Error('HTTP ' + res.status);
-
-      // lê como texto e desembrulha (o formato depende do proxy usado)
-      const text = await res.text();
-      const data = extractData(text);
-
+      const data = extractData(await res.text());
       render(data);
-
-      // status conforme a idade do updatedAt (fetch deu certo aqui)
       const age = data.updatedAt ? Date.now() - new Date(data.updatedAt).getTime() : 0;
       setStatus(age > CONFIG.staleThreshold ? 'stale' : 'live', age);
-
     } catch (err) {
       clearTimeout(timer);
       console.warn('[overlay] falha ao consultar API:', err.message);
-      // o fetch falhou: mantém o último dado bom na tela e sinaliza reconexão
       if (lastGood) setStatus('reconnecting');
       else setStatus('offline');
     }
   }
 
-  // primeira carga + loop
-  poll();
-  setInterval(poll, CONFIG.pollInterval);
-  setInterval(evaluateFreshness, 15000); // reavalia "antigo" entre os polls
+  // ---------- MODO DE TESTE (dados falsos) ----------
+  const MOCK_ROUTE = [
+    { city: 'Londrina',      state: 'Paraná' },
+    { city: 'Maringá',       state: 'Paraná' },
+    { city: 'Cascavel',      state: 'Paraná' },
+    { city: 'Foz do Iguaçu', state: 'Paraná' },
+    { city: 'Florianópolis', state: 'Santa Catarina' },
+    { city: 'Criciúma',      state: 'Santa Catarina' },
+    { city: 'Porto Alegre',  state: 'Rio Grande do Sul' },
+    { city: 'Santa Maria',   state: 'Rio Grande do Sul' },
+    { city: 'São Borja',     state: 'Rio Grande do Sul' },
+  ];
+  let mockTickCount = 0;
+  let mockIdx = 0;
+  let mockKm = 500;
+  let mockCities = 27;
+  let mockStates = 1;
+  let mockPrevState = MOCK_ROUTE[0].state;
+
+  function mockTick() {
+    mockTickCount++;
+    // muda de cidade no tick 2, depois a cada cityEveryTicks
+    const changeCity = mockTickCount >= 2 &&
+      ((mockTickCount - 2) % CONFIG.mock.cityEveryTicks === 0);
+
+    if (changeCity) {
+      mockIdx = (mockIdx + 1) % MOCK_ROUTE.length;
+      mockCities += 1;                                  // nova cidade
+      if (MOCK_ROUTE[mockIdx].state !== mockPrevState) { // novo estado
+        mockStates += 1;
+        mockPrevState = MOCK_ROUTE[mockIdx].state;
+      }
+    }
+
+    mockKm += 30 + Math.floor(Math.random() * 120);     // km sempre sobe um pouco
+    const moving  = Math.random() > 0.4;
+    const speed   = moving ? 40 + Math.floor(Math.random() * 60)
+                           : Math.floor(Math.random() * 6);
+    const heading = moving ? Math.floor(Math.random() * 360) : null;
+    const spot = MOCK_ROUTE[mockIdx];
+
+    return {
+      lat: -28 + Math.random(), lng: -53 + Math.random(),
+      city: spot.city, state: spot.state,
+      updatedAt: new Date().toISOString(),
+      deviceId: 'MOCK', speed, heading, source: 'mock',
+      stats: { kmDriven: mockKm, citiesVisited: mockCities, statesVisited: mockStates },
+    };
+  }
+
+  // ---------- INÍCIO ----------
+  function start() {
+    scheduleCycle();   // começa a rotação cidade <-> totais
+
+    if (CONFIG.mock.enabled) {
+      body.dataset.mock = 'on';
+      const step = () => { render(mockTick()); setStatus('live', 0); };
+      step();
+      setInterval(step, T.poll);
+    } else {
+      poll();
+      setInterval(poll, T.poll);
+      setInterval(evaluateFreshness, 15000);
+    }
+  }
+  start();
 </script>
 </body>
