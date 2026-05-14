@@ -212,6 +212,9 @@
     color: var(--accent);
     display: inline-flex; align-items: center; gap: 5px;
   }
+  /* o display:inline-flex acima sobrepõe o [hidden] padrão do navegador;
+     esta regra devolve o comportamento de esconder quando hidden é setado */
+  .place .meta .move[hidden] { display: none; }
   .place .meta .move svg { width: 11px; height: 11px; }
   body[data-status="stale"] .place .meta .status-txt,
   body[data-status="reconnecting"] .place .meta .status-txt { color: var(--warn); }
