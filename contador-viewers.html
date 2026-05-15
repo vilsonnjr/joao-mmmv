@@ -98,8 +98,9 @@
     --gap:           7px;          /* espaço entre linhas */
     --pad:           11px;
     --margin:        24px;         /* distância do card até a borda da tela */
-    --row-h:         42px;
-    --num-size:      19px;
+    --row-h:         42px;         /* altura de cada linha */
+    --badge-size:    34px;         /* tamanho do ícone da plataforma */
+    --num-size:      23px;         /* tamanho do número da contagem */
     --shadow:        0 8px 28px rgba(0, 0, 0, 0.45);
 
     /* cores das plataformas */
@@ -161,8 +162,8 @@
 
   /* badge do ícone da plataforma */
   .badge {
-    width: var(--row-h);
-    height: var(--row-h);
+    width: var(--badge-size);
+    height: var(--badge-size);
     flex-shrink: 0;
     border-radius: 10px;
     display: flex;
@@ -189,8 +190,8 @@
     flex-shrink: 0;
   }
   .badge-group .badge {
-    width: calc(var(--row-h) - 8px);
-    height: calc(var(--row-h) - 8px);
+    width: calc(var(--badge-size) - 6px);
+    height: calc(var(--badge-size) - 6px);
     border-radius: 8px;
   }
 
