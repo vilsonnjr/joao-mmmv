@@ -1,0 +1,821 @@
+<!--
+  CONTADOR DE VIEWERS — Overlay para OBS (arquivo único)
+  ============================================================
+  Mostra, de forma compacta, quantas pessoas estão assistindo em
+  cada plataforma (Twitch, YouTube e Kick). Aceita vários canais
+  por plataforma — é só ir somando na URL.
+
+  TUDO num arquivo só. Twitch funciona direto, sem nada a configurar.
+  YouTube funciona de dois jeitos (você escolhe no CONFIG):
+    - "scrape": SEM chave de API — lê a página da live via corsproxy.io.
+                Não precisa configurar nada. É mais frágil.
+    - "apikey": com a chave da YouTube Data API v3. Mais estável.
+  Kick passa pelo corsproxy.io (mesmo proxy do seu overlay de localização).
+  Por causa do corsproxy.io, este arquivo precisa rodar no GitHub Pages.
+
+  ------------------------------------------------------------
+  PASSO A PASSO
+  ------------------------------------------------------------
+   1. (Opcional) Para usar o YouTube no modo "apikey", pegue uma chave da
+      YouTube Data API v3: console.cloud.google.com -> criar projeto ->
+      "APIs e serviços" -> ativar "YouTube Data API v3" -> Credenciais ->
+      Criar chave de API. Recomendado restringir por domínio github.io e
+      por API. Se quiser rodar SEM chave, pule este passo (fica no modo
+      "scrape" automaticamente).
+   2. Se pegou a chave, cole-a no campo youtubeApiKey no bloco CONFIG.
+   3. Hospede este arquivo no GitHub Pages (mesmo lugar do overlay de
+      localização). É obrigatório: o corsproxy.io grátis só aceita
+      requisições vindas de origens da lista dele (*.github.io está na
+      lista). Abrir como file:// NÃO funciona.
+   4. No OBS: Fontes -> + -> Navegador. Em "URL", aponte para este arquivo
+      COM os canais na query (exemplos abaixo). Largura 600 · Altura 400.
+   5. Se algum dia o corsproxy.io não der conta do Kick (ele fica atrás do
+      Cloudflare e PODE ser bloqueado), veja o bloco "PLANO B — PROXY
+      PRÓPRIO DO KICK" no fim deste arquivo.
+
+  ------------------------------------------------------------
+  PARÂMETROS DA URL
+  ------------------------------------------------------------
+   twitch=canal1,canal2        -> 1+ canais da Twitch (login do canal)
+   youtube=@canal,UCxxxx,v:ID  -> 1+ canais do YouTube. Pode ser handle
+                                  (@nome), channelId (UC...) ou o ID do
+                                  vídeo da live direto (v:VIDEO_ID).
+                                  Funciona nos dois modos (scrape/apikey).
+                                  No modo "apikey": @nome/UC... gastam 100
+                                  unidades de cota por descoberta de live
+                                  (com cache); v:VIDEO_ID gasta só 1.
+                                  No modo "scrape" não há cota — mas o
+                                  v:VIDEO_ID é o mais confiável de parsear.
+   kick=canal1,canal2          -> 1+ canais do Kick (slug do canal).
+                                  Passa pelo corsproxy.io automaticamente.
+   mode=sum | each             -> sum: 1 linha por plataforma (total somado)
+                                  each: 1 linha por canal. Padrão: sum
+   layout=vertical | horizontal-> empilhado ou lado a lado. Padrão: vertical
+   pos=top-left | top-right |
+       bottom-left | bottom-right -> canto do card. Padrão: top-left
+   compact=1                   -> números curtos (1,2 mil em vez de 1.234)
+   hideoffline=1               -> esconde quem está offline (padrão: esmaecido)
+   poll=20                     -> intervalo de atualização em segundos (padrão: 20)
+
+  Exemplo completo:
+   contador-viewers.html?twitch=canalA,canalB&youtube=@canalC&kick=canalD&mode=each&pos=top-right
+  ============================================================
+-->
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Contador de Viewers</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link
+  href="https://fonts.googleapis.com/css2?family=Chivo+Mono:wght@600;700&family=Outfit:wght@500;600&display=swap"
+  rel="stylesheet"
+/>
+<style>
+  /* ===== TEMA — ajuste à vontade ===== */
+  :root {
+    --bg:            rgba(14, 15, 20, 0.78);
+    --border:        rgba(255, 255, 255, 0.10);
+    --text:          #f4f4f6;
+    --text-dim:      #9aa0ac;
+    --radius:        14px;
+    --gap:           7px;          /* espaço entre linhas */
+    --pad:           11px;
+    --margin:        24px;         /* distância do card até a borda da tela */
+    --row-h:         42px;
+    --num-size:      19px;
+    --shadow:        0 8px 28px rgba(0, 0, 0, 0.45);
+
+    /* cores das plataformas */
+    --twitch:        #9146ff;
+    --youtube:       #ff0033;
+    --kick:          #53fc18;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%;
+    background: transparent;
+    overflow: hidden;
+    font-family: "Outfit", sans-serif;
+  }
+
+  /* posicionamento do card nos cantos */
+  #widget {
+    position: fixed;
+    display: flex;
+    flex-direction: column;
+    gap: var(--gap);
+    padding: var(--pad);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    backdrop-filter: blur(14px) saturate(140%);
+    -webkit-backdrop-filter: blur(14px) saturate(140%);
+    transition: opacity 0.4s ease;
+  }
+  #widget.layout-horizontal { flex-direction: row; }
+
+  #widget.pos-top-left     { top: var(--margin);    left: var(--margin); }
+  #widget.pos-top-right    { top: var(--margin);    right: var(--margin); }
+  #widget.pos-bottom-left  { bottom: var(--margin); left: var(--margin); }
+  #widget.pos-bottom-right { bottom: var(--margin); right: var(--margin); }
+
+  #widget.stale { opacity: 0.45; }
+
+  /* cada linha = ícone + número */
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    height: var(--row-h);
+    padding-right: 4px;
+    opacity: 0;
+    transform: translateY(6px);
+    animation: rowIn 0.45s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  }
+  @keyframes rowIn { to { opacity: 1; transform: translateY(0); } }
+
+  .row.offline { opacity: 0.34; }
+  .row.offline .live-dot { background: var(--text-dim); box-shadow: none; }
+
+  /* badge do ícone da plataforma */
+  .badge {
+    width: var(--row-h);
+    height: var(--row-h);
+    flex-shrink: 0;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+  }
+  .badge svg { width: 56%; height: 56%; display: block; }
+  .badge.twitch  { background: var(--twitch);  }
+  .badge.youtube { background: var(--youtube); }
+  .badge.kick    { background: var(--kick);    }
+  .badge.twitch  svg { fill: #fff; }
+  .badge.youtube svg { fill: #fff; }
+  .badge.kick    svg { fill: #0c0c0c; }
+
+  /* bloco de texto à direita do ícone */
+  .info {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    line-height: 1.05;
+    min-width: 0;
+  }
+  .count-line { display: flex; align-items: baseline; gap: 6px; }
+  .count {
+    font-family: "Chivo Mono", monospace;
+    font-weight: 700;
+    font-size: var(--num-size);
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+  }
+  .live-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: #ff3b3b;
+    box-shadow: 0 0 6px rgba(255, 59, 59, 0.9);
+    flex-shrink: 0;
+    align-self: center;
+    animation: pulse 1.8s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%      { opacity: 0.35; transform: scale(0.78); }
+  }
+  .label {
+    font-size: 10.5px;
+    font-weight: 600;
+    color: var(--text-dim);
+    text-transform: lowercase;
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 130px;
+  }
+
+  /* mensagem de configuração / erro */
+  .hint {
+    font-size: 12px;
+    color: var(--text-dim);
+    padding: 6px 4px;
+    max-width: 260px;
+    line-height: 1.4;
+  }
+  .hint b { color: var(--text); font-weight: 600; }
+</style>
+</head>
+<body>
+<div id="widget"></div>
+
+<script>
+/* ===================== CONFIG ===================== */
+const CONFIG = {
+  // Como ler a contagem do YouTube:
+  //   "scrape"  -> SEM chave de API. Lê a página da live do YouTube
+  //               através do corsProxy (abaixo). Não precisa configurar
+  //               nada, mas é mais frágil: depende do layout da página
+  //               do YouTube e do proxy conseguir baixar a página.
+  //   "apikey"  -> usa a YouTube Data API v3 (precisa colar a chave em
+  //               youtubeApiKey). É o jeito mais estável e confiável.
+  //   "auto"    -> usa "apikey" se você colar uma chave; senão "scrape".
+  youtubeMode: "auto",
+
+  // Chave da YouTube Data API v3 (só usada nos modos "apikey"/"auto").
+  // console.cloud.google.com -> ativar "YouTube Data API v3" -> Credenciais.
+  // Deixe o placeholder se quiser rodar SEM chave (modo scrape).
+  youtubeApiKey: "COLE_AQUI_SUA_CHAVE_DO_YOUTUBE",
+
+  // Proxy CORS. Usado pelo Kick (sempre) e pelo YouTube no modo "scrape".
+  // O Kick e a página do YouTube não enviam cabeçalho de CORS, então o
+  // navegador não consegue lê-los direto — a requisição passa por aqui.
+  //
+  // >>> TESTE TEMPORÁRIO <<<  está VAZIO de propósito, para você ver o
+  // erro de CORS acontecer (Kick e YouTube vão bater direto na origem e
+  // devem falhar). Abra o Console do navegador (F12) que os erros de CORS
+  // aparecem lá. Para voltar ao normal, descomente a linha do corsproxy.io:
+  corsProxy: "",
+  // corsProxy: "https://corsproxy.io/?url=",
+
+  // valores padrão (a URL do overlay sobrescreve estes)
+  pollInterval: 20,        // segundos
+  mode: "sum",             // "sum" = total por plataforma | "each" = por canal
+  layout: "vertical",      // "vertical" | "horizontal"
+  position: "top-left",    // top-left | top-right | bottom-left | bottom-right
+  compactNumbers: false,   // true => "1,2 mil"
+  hideOffline: false,      // true => some com quem está offline
+
+  // canais padrão, usados SÓ se a URL não trouxer nenhum parâmetro
+  defaults: { twitch: [], youtube: [], kick: [] },
+
+  // cache (em memória) da descoberta de live no YouTube (modo apikey)
+  ytLiveCacheMs: 2 * 60 * 60 * 1000,  // 2h enquanto a live está no ar
+  ytOfflineCacheMs: 5 * 60 * 1000,    // 5min antes de procurar de novo
+};
+/* ================================================== */
+
+const PLATFORMS = ["twitch", "youtube", "kick"];
+
+// logos (Twitch e YouTube em path; Kick desenhado em blocos)
+const ICONS = {
+  twitch:
+    '<svg viewBox="0 0 24 24"><path d="M11.571 4.714h1.715v5.143H11.57zm4.715 0H18v5.143h-1.714zM6 0L1.714 4.286v15.428h5.143V24l4.286-4.286h3.428L22.286 12V0zm14.571 11.143l-3.428 3.428h-3.429l-3 3v-3H6.857V1.714h13.714Z"/></svg>',
+  youtube:
+    '<svg viewBox="0 0 24 24"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>',
+  kick:
+    '<svg viewBox="0 0 24 24">' +
+    '<rect x="3" y="3" width="5" height="18"/>' +
+    '<rect x="8" y="8.5" width="5" height="7"/>' +
+    '<rect x="14" y="3" width="5" height="5.5"/>' +
+    '<rect x="14" y="15.5" width="5" height="5.5"/>' +
+    "</svg>",
+};
+
+/* ---------- ler parâmetros da URL ---------- */
+const params = new URLSearchParams(location.search);
+
+function listParam(name) {
+  const raw = params.get(name);
+  if (!raw) return null;
+  return raw.split(",").map((s) => s.trim()).filter(Boolean);
+}
+
+const channels = {
+  twitch: listParam("twitch"),
+  youtube: listParam("youtube"),
+  kick: listParam("kick"),
+};
+const hasAnyFromUrl = PLATFORMS.some((p) => channels[p]);
+if (!hasAnyFromUrl) {
+  PLATFORMS.forEach((p) => (channels[p] = CONFIG.defaults[p]));
+} else {
+  PLATFORMS.forEach((p) => (channels[p] = channels[p] || []));
+}
+
+const settings = {
+  poll: Math.max(5, parseInt(params.get("poll"), 10) || CONFIG.pollInterval),
+  mode: params.get("mode") || CONFIG.mode,
+  layout: params.get("layout") || CONFIG.layout,
+  position: params.get("pos") || CONFIG.position,
+  compact: params.get("compact") === "1" || CONFIG.compactNumbers,
+  hideOffline: params.get("hideoffline") === "1" || CONFIG.hideOffline,
+};
+
+/* ---------- formatação de número (pt-BR) ---------- */
+const fmtFull = new Intl.NumberFormat("pt-BR");
+const fmtCompact = new Intl.NumberFormat("pt-BR", {
+  notation: "compact",
+  maximumFractionDigits: 1,
+});
+function fmt(n) {
+  return settings.compact ? fmtCompact.format(n) : fmtFull.format(n);
+}
+
+/* =================================================================
+   FETCHERS — cada plataforma é independente e trata seus próprios
+   erros, então uma falhar nunca derruba as outras.
+   Formato de retorno: { channel, live, viewers, error }
+   ================================================================= */
+
+/* ---------- TWITCH (via DecAPI — sem chave) ---------- */
+async function getTwitch(channel) {
+  try {
+    const r = await fetch(
+      "https://decapi.me/twitch/viewercount/" + encodeURIComponent(channel),
+      { cache: "no-store" }
+    );
+    const text = (await r.text()).trim();
+    // DecAPI devolve só o número quando está ao vivo; qualquer outra
+    // coisa ("<canal> is offline" etc.) significa fora do ar.
+    if (/^\d+$/.test(text)) {
+      return { channel, live: true, viewers: parseInt(text, 10), error: null };
+    }
+    return { channel, live: false, viewers: 0, error: null };
+  } catch (e) {
+    return { channel, live: false, viewers: null, error: "twitch_falhou" };
+  }
+}
+
+/* ---------- YOUTUBE ----------
+   Dois modos: "apikey" (YouTube Data API v3) e "scrape" (lê a página
+   da live via corsProxy, sem chave). O dispatcher getYouTube() escolhe. */
+
+function ytUseScrape() {
+  if (CONFIG.youtubeMode === "scrape") return true;
+  if (CONFIG.youtubeMode === "apikey") return false;
+  // "auto": usa scrape se não houver chave configurada
+  return !CONFIG.youtubeApiKey || CONFIG.youtubeApiKey.includes("COLE_AQUI");
+}
+
+async function getYouTube(input) {
+  return ytUseScrape() ? getYouTubeScrape(input) : getYouTubeApi(input);
+}
+
+/* ===== modo SCRAPE (sem chave de API) ===== */
+async function getYouTubeScrape(input) {
+  try {
+    // monta a URL da página da live conforme o tipo de identificador
+    let pageUrl;
+    if (input.startsWith("v:")) {
+      pageUrl = "https://www.youtube.com/watch?v=" + encodeURIComponent(input.slice(2));
+    } else if (input.startsWith("UC")) {
+      pageUrl = "https://www.youtube.com/channel/" + input + "/live";
+    } else {
+      const handle = input.startsWith("@") ? input : "@" + input;
+      pageUrl = "https://www.youtube.com/" + handle + "/live";
+    }
+    pageUrl += (pageUrl.indexOf("?") >= 0 ? "&" : "?") + "_cb=" + Date.now();
+
+    // Se corsProxy estiver vazio, bate DIRETO no YouTube (modo de teste —
+    // deve falhar com erro de CORS). Com proxy, embrulha a URL.
+    const proxy = (CONFIG.corsProxy || "").trim();
+    const fetchUrl = proxy ? proxy + encodeURIComponent(pageUrl) : pageUrl;
+
+    const r = await fetch(fetchUrl, { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const html = await r.text();
+    const parsed = parseYtViewers(html);
+    if (!parsed.found) {
+      // não achou o contador -> provavelmente o canal não está ao vivo
+      return { channel: input, live: false, viewers: 0, error: null };
+    }
+    return {
+      channel: input,
+      live: parsed.live,
+      viewers: parsed.live ? parsed.viewers : 0,
+      error: null,
+    };
+  } catch (e) {
+    console.warn("[contador-viewers] YouTube (scrape) falhou para '" + input + "':", e);
+    return { channel: input, live: false, viewers: null, error: "yt_falhou" };
+  }
+}
+
+// extrai a contagem de "assistindo agora" do HTML da página do YouTube.
+// O número vem dentro do ytInitialData, no videoViewCountRenderer.
+function parseYtViewers(html) {
+  // ex. ao vivo: "viewCount":{"runs":[{"text":"1.234"},{"text":" assistindo agora"}
+  let m = html.match(
+    /"videoViewCountRenderer":\{"viewCount":\{"runs":\[\{"text":"([\d.,\s]+)"\},\{"text":"([^"]*)"/
+  );
+  if (m) {
+    const n = parseInt(m[1].replace(/\D/g, ""), 10);
+    // "watching"/"assistindo" no segundo run = está AO VIVO agora
+    const live = /watch|assist/i.test(m[2]);
+    if (!isNaN(n)) return { found: true, live, viewers: n };
+  }
+  // fallback: campo originalViewCount (número cru) + flag isLiveContent
+  m = html.match(/"originalViewCount":"(\d+)"/);
+  if (m) {
+    const n = parseInt(m[1], 10);
+    const live = /"isLiveContent":true/.test(html) || /"isLive":true/.test(html);
+    if (!isNaN(n)) return { found: true, live, viewers: n };
+  }
+  return { found: false, live: false, viewers: 0 };
+}
+
+/* ===== modo APIKEY (YouTube Data API v3) ===== */
+const ytMem = { chan: new Map(), live: new Map() };
+
+async function ytResolveChannelId(input) {
+  if (input.startsWith("UC")) return input; // já é channelId
+  const handle = input.startsWith("@") ? input : "@" + input;
+  if (ytMem.chan.has(handle)) return ytMem.chan.get(handle);
+  const r = await fetch(
+    "https://www.googleapis.com/youtube/v3/channels?part=id&forHandle=" +
+      encodeURIComponent(handle) +
+      "&key=" +
+      CONFIG.youtubeApiKey
+  );
+  const j = await r.json();
+  const id = j.items && j.items[0] && j.items[0].id;
+  if (id) ytMem.chan.set(handle, id);
+  return id || null;
+}
+
+async function ytResolveLiveVideo(channelId) {
+  const cached = ytMem.live.get(channelId);
+  if (cached && cached.expires > Date.now()) return cached.videoId;
+  // search.list — 100 unidades de cota
+  const r = await fetch(
+    "https://www.googleapis.com/youtube/v3/search?part=id&channelId=" +
+      encodeURIComponent(channelId) +
+      "&eventType=live&type=video&key=" +
+      CONFIG.youtubeApiKey
+  );
+  const j = await r.json();
+  const vid = j.items && j.items[0] && j.items[0].id && j.items[0].id.videoId;
+  ytMem.live.set(channelId, {
+    videoId: vid || null,
+    expires: Date.now() + (vid ? CONFIG.ytLiveCacheMs : CONFIG.ytOfflineCacheMs),
+  });
+  return vid || null;
+}
+
+async function getYouTubeApi(input) {
+  if (!CONFIG.youtubeApiKey || CONFIG.youtubeApiKey.includes("COLE_AQUI")) {
+    return { channel: input, live: false, viewers: null, error: "yt_sem_chave" };
+  }
+  try {
+    let videoId;
+    if (input.startsWith("v:")) {
+      videoId = input.slice(2);
+    } else {
+      const cid = await ytResolveChannelId(input);
+      if (!cid)
+        return { channel: input, live: false, viewers: 0, error: "yt_canal_nao_encontrado" };
+      videoId = await ytResolveLiveVideo(cid);
+    }
+    if (!videoId) return { channel: input, live: false, viewers: 0, error: null };
+
+    const r = await fetch(
+      "https://www.googleapis.com/youtube/v3/videos?part=liveStreamingDetails&id=" +
+        encodeURIComponent(videoId) +
+        "&key=" +
+        CONFIG.youtubeApiKey
+    );
+    const j = await r.json();
+    const item = j.items && j.items[0];
+    const cv =
+      item && item.liveStreamingDetails && item.liveStreamingDetails.concurrentViewers;
+
+    if (cv == null) {
+      // vídeo não está mais ao vivo — invalida o cache pra procurar de novo
+      if (!input.startsWith("v:")) {
+        const cid = await ytResolveChannelId(input);
+        if (cid) ytMem.live.delete(cid);
+      }
+      return { channel: input, live: false, viewers: 0, error: null };
+    }
+    return { channel: input, live: true, viewers: parseInt(cv, 10), error: null };
+  } catch (e) {
+    return { channel: input, live: false, viewers: null, error: "yt_falhou" };
+  }
+}
+
+/* ---------- KICK (via corsProxy, ou proxy dedicado do PLANO B) ---------- */
+async function getKick(slug) {
+  try {
+    let url, mode;
+    const proxy = (CONFIG.corsProxy || "").trim();
+    const kickApi =
+      "https://kick.com/api/v2/channels/" +
+      encodeURIComponent(slug) +
+      "?_cb=" +
+      Date.now();
+
+    if (!proxy) {
+      // Sem proxy: bate DIRETO na API do Kick (modo de teste —
+      // deve falhar com erro de CORS).
+      url = kickApi;
+      mode = "wrap";
+    } else if (proxy.endsWith("=")) {
+      // proxy CORS genérico (ex.: corsproxy.io/?url=) — embrulha a API do Kick.
+      url = proxy + encodeURIComponent(kickApi);
+      mode = "wrap";
+    } else {
+      // proxy dedicado do Kick (o Worker do PLANO B) — usa ?slug=
+      url = proxy.replace(/\/+$/, "") + "?slug=" + encodeURIComponent(slug);
+      mode = "dedicated";
+    }
+
+    const r = await fetch(url, { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const j = await r.json();
+
+    if (mode === "wrap") {
+      // resposta crua da API v2 do Kick: campo "livestream" (null = offline)
+      const ls = j.livestream;
+      return {
+        channel: slug,
+        live: !!(ls && ls.is_live),
+        viewers: ls && ls.is_live ? ls.viewer_count || 0 : 0,
+        error: null,
+      };
+    }
+    // proxy dedicado já devolve { live, viewers }
+    return {
+      channel: slug,
+      live: !!j.live,
+      viewers: j.live ? j.viewers || 0 : 0,
+      error: null,
+    };
+  } catch (e) {
+    console.warn("[contador-viewers] Kick falhou para '" + slug + "':", e);
+    return { channel: slug, live: false, viewers: null, error: "kick_falhou" };
+  }
+}
+
+/* =================================================================
+   RENDERIZAÇÃO
+   ================================================================= */
+const widget = document.getElementById("widget");
+widget.classList.add("layout-" + settings.layout, "pos-" + settings.position);
+
+const rowEls = {}; // chave -> { count, rowEl, valueShown }
+let built = false;
+
+function showHint(html) {
+  widget.innerHTML = '<div class="hint">' + html + "</div>";
+  built = false;
+}
+
+function buildRows() {
+  widget.innerHTML = "";
+  Object.keys(rowEls).forEach((k) => delete rowEls[k]);
+
+  const items = []; // { key, platform, label }
+  PLATFORMS.forEach((platform) => {
+    const list = channels[platform] || [];
+    if (!list.length) return;
+    if (settings.mode === "each") {
+      list.forEach((ch) => {
+        const cleanLabel = ch.replace(/^v:/, "").replace(/^@/, "");
+        items.push({ key: platform + ":" + ch, platform, label: cleanLabel });
+      });
+    } else {
+      items.push({ key: platform, platform, label: platform });
+    }
+  });
+
+  items.forEach((it, idx) => {
+    const row = document.createElement("div");
+    row.className = "row";
+    row.style.animationDelay = idx * 70 + "ms";
+
+    const badge = document.createElement("div");
+    badge.className = "badge " + it.platform;
+    badge.innerHTML = ICONS[it.platform];
+
+    const info = document.createElement("div");
+    info.className = "info";
+
+    const countLine = document.createElement("div");
+    countLine.className = "count-line";
+    const dot = document.createElement("span");
+    dot.className = "live-dot";
+    const count = document.createElement("span");
+    count.className = "count";
+    count.textContent = "—";
+    countLine.appendChild(dot);
+    countLine.appendChild(count);
+    info.appendChild(countLine);
+
+    if (settings.mode === "each") {
+      const label = document.createElement("span");
+      label.className = "label";
+      label.textContent = it.label;
+      info.appendChild(label);
+    }
+
+    row.appendChild(badge);
+    row.appendChild(info);
+    widget.appendChild(row);
+
+    rowEls[it.key] = { count, rowEl: row, valueShown: 0 };
+  });
+
+  built = true;
+}
+
+/* animação de contagem */
+function tween(el, from, to) {
+  const dur = 600;
+  const start = performance.now();
+  function step(now) {
+    const t = Math.min(1, (now - start) / dur);
+    const eased = 1 - Math.pow(1 - t, 3);
+    el.textContent = fmt(Math.round(from + (to - from) * eased));
+    if (t < 1) requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
+}
+
+function updateCell(cell, value, isLive, hasError) {
+  if (hasError) {
+    cell.count.textContent = "—";
+    cell.valueShown = 0;
+  } else if (cell.valueShown !== value) {
+    tween(cell.count, cell.valueShown, value);
+    cell.valueShown = value;
+  }
+  const dim = !isLive || hasError;
+  cell.rowEl.classList.toggle("offline", dim);
+  if (settings.hideOffline) cell.rowEl.style.display = dim ? "none" : "";
+}
+
+function applyData(data) {
+  if (!built) buildRows();
+
+  PLATFORMS.forEach((platform) => {
+    const results = data[platform] || [];
+    if (!results.length) return;
+
+    if (settings.mode === "each") {
+      results.forEach((r) => {
+        const cell = rowEls[platform + ":" + r.channel];
+        if (!cell) return;
+        const live = !!r.live && r.viewers != null;
+        updateCell(cell, live ? r.viewers : 0, live, !!r.error);
+      });
+    } else {
+      const cell = rowEls[platform];
+      if (!cell) return;
+      const liveOnes = results.filter((r) => r.live && r.viewers != null);
+      const total = liveOnes.reduce((s, r) => s + (r.viewers || 0), 0);
+      // erro só conta se TODOS deram erro (ex.: Kick sem proxy)
+      const allError = results.every((r) => r.error);
+      updateCell(cell, total, liveOnes.length > 0, allError);
+    }
+  });
+}
+
+/* =================================================================
+   LOOP DE ATUALIZAÇÃO
+   ================================================================= */
+async function poll() {
+  try {
+    const [tw, yt, kk] = await Promise.all([
+      Promise.all((channels.twitch || []).map(getTwitch)),
+      Promise.all((channels.youtube || []).map(getYouTube)),
+      Promise.all((channels.kick || []).map(getKick)),
+    ]);
+    applyData({ twitch: tw, youtube: yt, kick: kk });
+    widget.classList.remove("stale");
+  } catch (e) {
+    if (built) widget.classList.add("stale");
+    console.error("[contador-viewers]", e);
+  }
+}
+
+function start() {
+  const total = PLATFORMS.reduce(
+    (s, p) => s + (channels[p] ? channels[p].length : 0),
+    0
+  );
+  if (total === 0) {
+    showHint(
+      "Nenhum canal configurado.<br>Adicione na URL, ex.:<br>" +
+        "<b>?twitch=canal&youtube=@canal&kick=canal</b>"
+    );
+    return;
+  }
+  poll();
+  setInterval(poll, settings.poll * 1000);
+}
+
+start();
+</script>
+</body>
+</html>
+
+<!--
+  ============================================================
+  PLANO B — PROXY PRÓPRIO DO KICK
+  ============================================================
+  Por padrão o Kick passa pelo corsproxy.io (mesmo proxy do seu overlay
+  de localização), e não precisa de nada disto aqui.
+
+  MAS: o Kick fica atrás do Cloudflare, e o corsproxy.io PODE ser
+  bloqueado por ele (resposta 403 / Cloudflare challenge). Se isso
+  acontecer — canais de Kick aparecendo sempre esmaecidos enquanto
+  Twitch/YouTube funcionam — a solução definitiva é ter um proxy seu.
+
+  O código abaixo é um Cloudflare Worker minúsculo, só pra Kick. Para
+  usar: dash.cloudflare.com -> Workers & Pages -> Create Worker -> cole
+  isto -> Deploy. Depois troque o campo corsProxy lá no CONFIG pela
+  URL do seu Worker (algo .workers.dev, SEM "?url=" no fim — o overlay
+  detecta sozinho que é proxy dedicado e usa ?slug=). Se preferir, dá
+  pra rodar o mesmo conceito como uma rota no seu Coolify / servidor.
+
+  Ele tenta a API OFICIAL do Kick se você configurar as variáveis
+  KICK_CLIENT_ID e KICK_CLIENT_SECRET (kick.com/settings/developer ->
+  criar app OAuth). Sem essas variáveis, ele cai no endpoint não-oficial
+  (funciona às vezes, pode ser bloqueado pelo Cloudflare do Kick).
+
+  ---- início do Worker ----
+
+  const CORS = {
+    "Access-Control-Allow-Origin": "*",
+    "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "no-store",
+  };
+
+  export default {
+    async fetch(request, env, ctx) {
+      const slug = new URL(request.url).searchParams.get("slug");
+      if (!slug) return new Response(JSON.stringify({ error: "sem_slug" }), { headers: CORS });
+
+      // 1) tenta API oficial (precisa de KICK_CLIENT_ID + KICK_CLIENT_SECRET)
+      if (env.KICK_CLIENT_ID && env.KICK_CLIENT_SECRET) {
+        try {
+          const cache = caches.default;
+          const tkKey = new Request("https://cache.local/kick-token");
+          let token = null;
+          const cachedTk = await cache.match(tkKey);
+          if (cachedTk) token = await cachedTk.text();
+          if (!token) {
+            const tr = await fetch("https://id.kick.com/oauth/token", {
+              method: "POST",
+              headers: { "Content-Type": "application/x-www-form-urlencoded" },
+              body: new URLSearchParams({
+                grant_type: "client_credentials",
+                client_id: env.KICK_CLIENT_ID,
+                client_secret: env.KICK_CLIENT_SECRET,
+              }),
+            });
+            if (tr.ok) {
+              const tj = await tr.json();
+              token = tj.access_token;
+              if (token) ctx.waitUntil(cache.put(tkKey,
+                new Response(token, { headers: { "Cache-Control": "max-age=3000" } })));
+            }
+          }
+          if (token) {
+            const r = await fetch(
+              "https://api.kick.com/public/v1/channels?slug=" + encodeURIComponent(slug),
+              { headers: { Authorization: "Bearer " + token, Accept: "application/json" } }
+            );
+            if (r.ok) {
+              const j = await r.json();
+              const ch = j.data && j.data[0];
+              const live = ch && ch.stream && ch.stream.is_live;
+              return new Response(JSON.stringify({
+                live: !!live,
+                viewers: live ? (ch.stream.viewer_count || 0) : 0,
+              }), { headers: CORS });
+            }
+          }
+        } catch (e) { /* cai pro fallback abaixo */ }
+      }
+
+      // 2) fallback: endpoint não-oficial do Kick
+      try {
+        const r = await fetch("https://kick.com/api/v2/channels/" + encodeURIComponent(slug), {
+          headers: { Accept: "application/json", "User-Agent": "Mozilla/5.0" },
+        });
+        if (!r.ok) return new Response(JSON.stringify({ live: false, viewers: 0, error: "http_" + r.status }), { headers: CORS });
+        const j = await r.json();
+        const ls = j.livestream;
+        return new Response(JSON.stringify({
+          live: !!(ls && ls.is_live),
+          viewers: ls && ls.is_live ? (ls.viewer_count || 0) : 0,
+        }), { headers: CORS });
+      } catch (e) {
+        return new Response(JSON.stringify({ live: false, viewers: 0, error: "falhou" }), { headers: CORS });
+      }
+    },
+  };
+
+  ---- fim do Worker ----
+  ============================================================
+-->
