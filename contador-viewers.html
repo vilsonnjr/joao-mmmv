@@ -10,8 +10,11 @@
     - "scrape": SEM chave de API — lê a página da live via corsproxy.io.
                 Não precisa configurar nada. É mais frágil.
     - "apikey": com a chave da YouTube Data API v3. Mais estável.
-  Kick passa pelo corsproxy.io (mesmo proxy do seu overlay de localização).
-  Por causa do corsproxy.io, este arquivo precisa rodar no GitHub Pages.
+  Kick bate direto na API dele (funcionou sem proxy nos testes). Se um dia
+  voltar a dar erro de CORS, é só preencher o campo kickProxy no CONFIG.
+  Como o YouTube (modo scrape) usa o corsproxy.io, este arquivo precisa
+  rodar no GitHub Pages (o corsproxy.io grátis só aceita origens da lista
+  dele, e *.github.io está nela).
 
   ------------------------------------------------------------
   PASSO A PASSO
@@ -47,7 +50,7 @@
                                   No modo "scrape" não há cota — mas o
                                   v:VIDEO_ID é o mais confiável de parsear.
    kick=canal1,canal2          -> 1+ canais do Kick (slug do canal).
-                                  Passa pelo corsproxy.io automaticamente.
+                                  Conecta direto na API do Kick.
    mode=sum | each             -> sum: 1 linha por plataforma (total somado)
                                   each: 1 linha por canal. Padrão: sum
    layout=vertical | horizontal-> empilhado ou lado a lado. Padrão: vertical
@@ -222,7 +225,7 @@
 const CONFIG = {
   // Como ler a contagem do YouTube:
   //   "scrape"  -> SEM chave de API. Lê a página da live do YouTube
-  //               através do corsProxy (abaixo). Não precisa configurar
+  //               através do youtubeProxy (abaixo). Não precisa configurar
   //               nada, mas é mais frágil: depende do layout da página
   //               do YouTube e do proxy conseguir baixar a página.
   //   "apikey"  -> usa a YouTube Data API v3 (precisa colar a chave em
@@ -235,16 +238,20 @@ const CONFIG = {
   // Deixe o placeholder se quiser rodar SEM chave (modo scrape).
   youtubeApiKey: "COLE_AQUI_SUA_CHAVE_DO_YOUTUBE",
 
-  // Proxy CORS. Usado pelo Kick (sempre) e pelo YouTube no modo "scrape".
-  // O Kick e a página do YouTube não enviam cabeçalho de CORS, então o
-  // navegador não consegue lê-los direto — a requisição passa por aqui.
+  // Proxies CORS — agora SEPARADOS por plataforma, porque no teste o
+  // Kick funcionou direto (sem proxy) mas o YouTube precisou de proxy.
   //
-  // >>> TESTE TEMPORÁRIO <<<  está VAZIO de propósito, para você ver o
-  // erro de CORS acontecer (Kick e YouTube vão bater direto na origem e
-  // devem falhar). Abra o Console do navegador (F12) que os erros de CORS
-  // aparecem lá. Para voltar ao normal, descomente a linha do corsproxy.io:
-  corsProxy: "",
-  // corsProxy: "https://corsproxy.io/?url=",
+  // youtubeProxy: usado pelo YouTube no modo "scrape". A página do
+  //   YouTube não envia cabeçalho de CORS, então precisa passar pelo
+  //   proxy. É o corsproxy.io (mesmo do seu overlay de localização) —
+  //   por isso este arquivo precisa rodar no GitHub Pages.
+  youtubeProxy: "https://corsproxy.io/?url=",
+  //
+  // kickProxy: VAZIO = bate direto na API do Kick (funcionou no teste).
+  //   Se algum dia o Kick voltar a bloquear (erro de CORS no console),
+  //   é só preencher com "https://corsproxy.io/?url=" — ou com a URL do
+  //   seu proxy próprio do PLANO B (ver fim do arquivo).
+  kickProxy: "",
 
   // valores padrão (a URL do overlay sobrescreve estes)
   pollInterval: 20,        // segundos
@@ -347,7 +354,7 @@ async function getTwitch(channel) {
 
 /* ---------- YOUTUBE ----------
    Dois modos: "apikey" (YouTube Data API v3) e "scrape" (lê a página
-   da live via corsProxy, sem chave). O dispatcher getYouTube() escolhe. */
+   da live via youtubeProxy, sem chave). O dispatcher getYouTube() escolhe. */
 
 function ytUseScrape() {
   if (CONFIG.youtubeMode === "scrape") return true;
@@ -375,9 +382,9 @@ async function getYouTubeScrape(input) {
     }
     pageUrl += (pageUrl.indexOf("?") >= 0 ? "&" : "?") + "_cb=" + Date.now();
 
-    // Se corsProxy estiver vazio, bate DIRETO no YouTube (modo de teste —
-    // deve falhar com erro de CORS). Com proxy, embrulha a URL.
-    const proxy = (CONFIG.corsProxy || "").trim();
+    // O YouTube precisa do proxy (a página não envia CORS). Se youtubeProxy
+    // estiver vazio, bate direto (vai falhar com erro de CORS).
+    const proxy = (CONFIG.youtubeProxy || "").trim();
     const fetchUrl = proxy ? proxy + encodeURIComponent(pageUrl) : pageUrl;
 
     const r = await fetch(fetchUrl, { cache: "no-store" });
@@ -502,11 +509,11 @@ async function getYouTubeApi(input) {
   }
 }
 
-/* ---------- KICK (via corsProxy, ou proxy dedicado do PLANO B) ---------- */
+/* ---------- KICK (direto, ou via kickProxy se preenchido) ---------- */
 async function getKick(slug) {
   try {
     let url, mode;
-    const proxy = (CONFIG.corsProxy || "").trim();
+    const proxy = (CONFIG.kickProxy || "").trim();
     const kickApi =
       "https://kick.com/api/v2/channels/" +
       encodeURIComponent(slug) +
@@ -514,8 +521,7 @@ async function getKick(slug) {
       Date.now();
 
     if (!proxy) {
-      // Sem proxy: bate DIRETO na API do Kick (modo de teste —
-      // deve falhar com erro de CORS).
+      // Sem proxy: bate DIRETO na API do Kick (funcionou no teste).
       url = kickApi;
       mode = "wrap";
     } else if (proxy.endsWith("=")) {
@@ -732,7 +738,7 @@ start();
 
   O código abaixo é um Cloudflare Worker minúsculo, só pra Kick. Para
   usar: dash.cloudflare.com -> Workers & Pages -> Create Worker -> cole
-  isto -> Deploy. Depois troque o campo corsProxy lá no CONFIG pela
+  isto -> Deploy. Depois troque o campo kickProxy lá no CONFIG pela
   URL do seu Worker (algo .workers.dev, SEM "?url=" no fim — o overlay
   detecta sozinho que é proxy dedicado e usa ?slug=). Se preferir, dá
   pra rodar o mesmo conceito como uma rota no seu Coolify / servidor.
