@@ -6,15 +6,12 @@
   por plataforma — é só ir somando na URL.
 
   TUDO num arquivo só. Twitch funciona direto, sem nada a configurar.
-  YouTube funciona de dois jeitos (você escolhe no CONFIG):
-    - "scrape": SEM chave de API — lê a página da live via corsproxy.io.
-                Não precisa configurar nada. É mais frágil.
-    - "apikey": com a chave da YouTube Data API v3. Mais estável.
+  YouTube usa a YouTube Data API v3 (modo "apikey" — a chave já está no
+  CONFIG). O modo "scrape" sem chave existe no código, mas NÃO funciona
+  com o corsproxy.io grátis: a página da live do YouTube passa de 1MB e
+  o corsproxy.io corta nesse tamanho.
   Kick bate direto na API dele (funcionou sem proxy nos testes). Se um dia
   voltar a dar erro de CORS, é só preencher o campo kickProxy no CONFIG.
-  Como o YouTube (modo scrape) usa o corsproxy.io, este arquivo precisa
-  rodar no GitHub Pages (o corsproxy.io grátis só aceita origens da lista
-  dele, e *.github.io está nela).
 
   ------------------------------------------------------------
   PASSO A PASSO
@@ -51,14 +48,26 @@
                                   v:VIDEO_ID é o mais confiável de parsear.
    kick=canal1,canal2          -> 1+ canais do Kick (slug do canal).
                                   Conecta direto na API do Kick.
-   mode=sum | each             -> sum: 1 linha por plataforma (total somado)
-                                  each: 1 linha por canal. Padrão: sum
+   mode=sum | each | total     -> sum:   1 linha por plataforma (total da
+                                          plataforma somado)
+                                  each:  1 linha por canal
+                                  total: 1 linha só — ícones de todas as
+                                         plataformas lado a lado + a soma
+                                         geral de TODOS os canais.
+                                  Padrão: sum
    layout=vertical | horizontal-> empilhado ou lado a lado. Padrão: vertical
    pos=top-left | top-right |
        bottom-left | bottom-right -> canto do card. Padrão: top-left
    compact=1                   -> números curtos (1,2 mil em vez de 1.234)
    hideoffline=1               -> esconde quem está offline (padrão: esmaecido)
+                                  no modo "total", esconde também o ícone
+                                  da plataforma que não tiver ninguém ao vivo
+   bg=0..100                   -> opacidade do fundo do card (0 = transparente,
+                                  100 = sólido). Padrão: 78
    poll=20                     -> intervalo de atualização em segundos (padrão: 20)
+   setup=1                     -> abre o WIZARD de configuração (formulário que
+                                  monta a URL pronta). O wizard também aparece
+                                  sozinho quando nenhum canal foi configurado.
 
   Exemplo completo:
    contador-viewers.html?twitch=canalA,canalB&youtube=@canalC&kick=canalD&mode=each&pos=top-right
@@ -79,7 +88,9 @@
 <style>
   /* ===== TEMA — ajuste à vontade ===== */
   :root {
-    --bg:            rgba(14, 15, 20, 0.78);
+    --bg-rgb:        14, 15, 20;   /* cor de fundo do card (R, G, B) */
+    --bg-alpha:      0.78;         /* opacidade do fundo (0 = transparente, 1 = sólido) */
+    --bg:            rgba(var(--bg-rgb), var(--bg-alpha));
     --border:        rgba(255, 255, 255, 0.10);
     --text:          #f4f4f6;
     --text-dim:      #9aa0ac;
@@ -164,6 +175,19 @@
   .badge.youtube svg { fill: #fff; }
   .badge.kick    svg { fill: #0c0c0c; }
 
+  /* grupo de ícones lado a lado (modo "total") */
+  .badge-group {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+  }
+  .badge-group .badge {
+    width: calc(var(--row-h) - 8px);
+    height: calc(var(--row-h) - 8px);
+    border-radius: 8px;
+  }
+
   /* bloco de texto à direita do ícone */
   .info {
     display: flex;
@@ -215,6 +239,183 @@
     line-height: 1.4;
   }
   .hint b { color: var(--text); font-weight: 600; }
+
+  /* ===================== WIZARD ===================== */
+  #wizard {
+    position: fixed;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    width: 380px;
+    max-width: calc(100vw - 32px);
+    max-height: calc(100vh - 32px);
+    overflow-y: auto;
+    background: rgba(16, 17, 23, 0.97);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.6);
+    padding: 20px;
+    font-family: "Outfit", sans-serif;
+    color: var(--text);
+  }
+  #wizard h1 {
+    font-size: 17px;
+    font-weight: 600;
+    margin-bottom: 2px;
+    letter-spacing: -0.01em;
+  }
+  #wizard .sub {
+    font-size: 11.5px;
+    color: var(--text-dim);
+    margin-bottom: 16px;
+  }
+  #wizard .group { margin-bottom: 14px; }
+  #wizard .group-title {
+    font-size: 10.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-dim);
+    margin-bottom: 7px;
+  }
+  #wizard label {
+    display: block;
+    font-size: 12px;
+    color: var(--text);
+    margin-bottom: 3px;
+  }
+  #wizard .field { margin-bottom: 9px; }
+  #wizard .hintline {
+    font-size: 10px;
+    color: var(--text-dim);
+    margin-top: 2px;
+  }
+  #wizard input[type="text"],
+  #wizard input[type="number"],
+  #wizard select {
+    width: 100%;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-family: "Outfit", sans-serif;
+    font-size: 12.5px;
+    padding: 7px 9px;
+    outline: none;
+  }
+  #wizard input:focus, #wizard select:focus {
+    border-color: rgba(255, 255, 255, 0.28);
+  }
+  #wizard .row2 { display: flex; gap: 8px; }
+  #wizard .row2 > div { flex: 1; }
+  #wizard .check {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12px;
+    margin-bottom: 7px;
+    cursor: pointer;
+  }
+  #wizard .check input { width: 14px; height: 14px; accent-color: var(--twitch); cursor: pointer; }
+  #wizard .slider-row { display: flex; align-items: center; gap: 9px; }
+  #wizard input[type="range"] {
+    flex: 1;
+    accent-color: var(--twitch);
+    cursor: pointer;
+  }
+  #wizard .slider-val {
+    font-family: "Chivo Mono", monospace;
+    font-size: 12px;
+    color: var(--text-dim);
+    min-width: 38px;
+    text-align: right;
+  }
+  #wizard .out {
+    margin-top: 6px;
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 9px;
+    font-family: "Chivo Mono", monospace;
+    font-size: 10.5px;
+    color: var(--text-dim);
+    word-break: break-all;
+    line-height: 1.45;
+    max-height: 78px;
+    overflow-y: auto;
+  }
+  #wizard .btns { display: flex; gap: 8px; margin-top: 12px; }
+  #wizard button {
+    flex: 1;
+    border: none;
+    border-radius: 9px;
+    padding: 9px 10px;
+    font-family: "Outfit", sans-serif;
+    font-size: 12.5px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: filter 0.15s ease, transform 0.05s ease;
+  }
+  #wizard button:active { transform: scale(0.98); }
+  #wizard button.primary { background: var(--twitch); color: #fff; }
+  #wizard button.ghost {
+    background: rgba(255, 255, 255, 0.07);
+    color: var(--text);
+    border: 1px solid var(--border);
+  }
+  #wizard button:hover { filter: brightness(1.12); }
+  #wizard .copied {
+    font-size: 11px;
+    color: var(--kick);
+    text-align: center;
+    margin-top: 8px;
+    height: 13px;
+  }
+
+  /* prévia ao vivo dentro do wizard */
+  #wizard .preview-stage {
+    position: relative;
+    width: 100%;
+    height: 170px;
+    border-radius: 10px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    background:
+      radial-gradient(circle at 22% 26%, rgba(120, 90, 255, 0.55), transparent 46%),
+      radial-gradient(circle at 82% 78%, rgba(0, 190, 165, 0.42), transparent 52%),
+      linear-gradient(135deg, #2b2742, #14131c 72%);
+  }
+  #wizard .preview-caption {
+    font-size: 10px;
+    color: var(--text-dim);
+    margin-top: 5px;
+    text-align: center;
+  }
+  #wizard .preview-card {
+    position: absolute;
+    display: flex;
+    flex-direction: column;
+    gap: var(--gap);
+    padding: var(--pad);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    backdrop-filter: blur(14px) saturate(140%);
+    -webkit-backdrop-filter: blur(14px) saturate(140%);
+  }
+  #wizard .preview-card.layout-horizontal { flex-direction: row; }
+  #wizard .preview-card.ppos-top-left {
+    top: 12px; left: 12px; transform-origin: top left; transform: scale(0.85);
+  }
+  #wizard .preview-card.ppos-top-right {
+    top: 12px; right: 12px; transform-origin: top right; transform: scale(0.85);
+  }
+  #wizard .preview-card.ppos-bottom-left {
+    bottom: 12px; left: 12px; transform-origin: bottom left; transform: scale(0.85);
+  }
+  #wizard .preview-card.ppos-bottom-right {
+    bottom: 12px; right: 12px; transform-origin: bottom right; transform: scale(0.85);
+  }
 </style>
 </head>
 <body>
@@ -224,27 +425,27 @@
 /* ===================== CONFIG ===================== */
 const CONFIG = {
   // Como ler a contagem do YouTube:
-  //   "scrape"  -> SEM chave de API. Lê a página da live do YouTube
-  //               através do youtubeProxy (abaixo). Não precisa configurar
-  //               nada, mas é mais frágil: depende do layout da página
-  //               do YouTube e do proxy conseguir baixar a página.
-  //   "apikey"  -> usa a YouTube Data API v3 (precisa colar a chave em
-  //               youtubeApiKey). É o jeito mais estável e confiável.
-  //   "auto"    -> usa "apikey" se você colar uma chave; senão "scrape".
-  youtubeMode: "auto",
+  //   "apikey"  -> usa a YouTube Data API v3 (precisa da chave em
+  //               youtubeApiKey). É o jeito estável e confiável. << EM USO
+  //   "scrape"  -> SEM chave: leria a página da live via youtubeProxy.
+  //               NÃO funciona com o corsproxy.io grátis — a página do
+  //               YouTube passa de 1MB e o corsproxy.io corta em 1MB.
+  //               Só serve com um proxy sem limite de tamanho (ex.: um
+  //               Worker seu). Por isso estamos no modo "apikey".
+  //   "auto"    -> usa "apikey" se houver chave; senão "scrape".
+  youtubeMode: "apikey",
 
-  // Chave da YouTube Data API v3 (só usada nos modos "apikey"/"auto").
+  // Chave da YouTube Data API v3.
   // console.cloud.google.com -> ativar "YouTube Data API v3" -> Credenciais.
-  // Deixe o placeholder se quiser rodar SEM chave (modo scrape).
-  youtubeApiKey: "COLE_AQUI_SUA_CHAVE_DO_YOUTUBE",
+  // IMPORTANTE: como este arquivo fica público no GitHub Pages, restrinja
+  // esta chave no Google Cloud (Referenciadores HTTP -> seu domínio
+  // github.io; e API -> só YouTube Data API v3).
+  youtubeApiKey: "AIzaSyDmX-Py-jLaC9WCuqUoIkt76sGm5weAjXE",
 
-  // Proxies CORS — agora SEPARADOS por plataforma, porque no teste o
-  // Kick funcionou direto (sem proxy) mas o YouTube precisou de proxy.
-  //
-  // youtubeProxy: usado pelo YouTube no modo "scrape". A página do
-  //   YouTube não envia cabeçalho de CORS, então precisa passar pelo
-  //   proxy. É o corsproxy.io (mesmo do seu overlay de localização) —
-  //   por isso este arquivo precisa rodar no GitHub Pages.
+  // youtubeProxy: só é usado no modo "scrape". Como o corsproxy.io corta
+  //   em 1MB e a página do YouTube é maior que isso, o scrape NÃO funciona
+  //   com ele. Deixado aqui só para o caso de um dia você usar um proxy
+  //   sem limite de tamanho.
   youtubeProxy: "https://corsproxy.io/?url=",
   //
   // kickProxy: VAZIO = bate direto na API do Kick (funcionou no teste).
@@ -255,11 +456,12 @@ const CONFIG = {
 
   // valores padrão (a URL do overlay sobrescreve estes)
   pollInterval: 20,        // segundos
-  mode: "sum",             // "sum" = total por plataforma | "each" = por canal
+  mode: "sum",             // "sum" = total por plataforma | "each" = por canal | "total" = soma geral numa linha
   layout: "vertical",      // "vertical" | "horizontal"
   position: "top-left",    // top-left | top-right | bottom-left | bottom-right
   compactNumbers: false,   // true => "1,2 mil"
   hideOffline: false,      // true => some com quem está offline
+  bgOpacity: 78,           // opacidade do fundo do card, 0 a 100
 
   // canais padrão, usados SÓ se a URL não trouxer nenhum parâmetro
   defaults: { twitch: [], youtube: [], kick: [] },
@@ -315,7 +517,15 @@ const settings = {
   position: params.get("pos") || CONFIG.position,
   compact: params.get("compact") === "1" || CONFIG.compactNumbers,
   hideOffline: params.get("hideoffline") === "1" || CONFIG.hideOffline,
+  bg: (function () {
+    const raw = params.get("bg");
+    const n = raw == null ? CONFIG.bgOpacity : parseInt(raw, 10);
+    return Math.max(0, Math.min(100, isNaN(n) ? CONFIG.bgOpacity : n));
+  })(),
 };
+
+// aplica a opacidade do fundo (parâmetro bg=0..100)
+document.documentElement.style.setProperty("--bg-alpha", settings.bg / 100);
 
 /* ---------- formatação de número (pt-BR) ---------- */
 const fmtFull = new Intl.NumberFormat("pt-BR");
@@ -505,6 +715,7 @@ async function getYouTubeApi(input) {
     }
     return { channel: input, live: true, viewers: parseInt(cv, 10), error: null };
   } catch (e) {
+    console.warn("[contador-viewers] YouTube (apikey) falhou para '" + input + "':", e);
     return { channel: input, live: false, viewers: null, error: "yt_falhou" };
   }
 }
@@ -579,6 +790,63 @@ function buildRows() {
   widget.innerHTML = "";
   Object.keys(rowEls).forEach((k) => delete rowEls[k]);
 
+  // helper: cria o bloco .info (linha do número + ponto de "ao vivo")
+  function makeInfo(labelText) {
+    const info = document.createElement("div");
+    info.className = "info";
+    const countLine = document.createElement("div");
+    countLine.className = "count-line";
+    const dot = document.createElement("span");
+    dot.className = "live-dot";
+    const count = document.createElement("span");
+    count.className = "count";
+    count.textContent = "—";
+    countLine.appendChild(dot);
+    countLine.appendChild(count);
+    info.appendChild(countLine);
+    if (labelText != null) {
+      const label = document.createElement("span");
+      label.className = "label";
+      label.textContent = labelText;
+      info.appendChild(label);
+    }
+    return { info, count };
+  }
+
+  // MODO TOTAL: uma única linha — ícones das plataformas configuradas
+  // lado a lado + a soma geral de TODOS os canais num número só.
+  if (settings.mode === "total") {
+    const active = PLATFORMS.filter((p) => (channels[p] || []).length);
+    const row = document.createElement("div");
+    row.className = "row";
+    row.style.animationDelay = "0ms";
+
+    const group = document.createElement("div");
+    group.className = "badge-group";
+    const totalBadges = {};
+    active.forEach((p) => {
+      const badge = document.createElement("div");
+      badge.className = "badge " + p;
+      badge.innerHTML = ICONS[p];
+      group.appendChild(badge);
+      totalBadges[p] = badge;
+    });
+
+    const made = makeInfo(null);
+    row.appendChild(group);
+    row.appendChild(made.info);
+    widget.appendChild(row);
+    rowEls["__total__"] = {
+      count: made.count,
+      rowEl: row,
+      valueShown: 0,
+      badges: totalBadges,
+    };
+    built = true;
+    return;
+  }
+
+  // MODOS SUM / EACH: uma linha por plataforma (sum) ou por canal (each)
   const items = []; // { key, platform, label }
   PLATFORMS.forEach((platform) => {
     const list = channels[platform] || [];
@@ -589,7 +857,7 @@ function buildRows() {
         items.push({ key: platform + ":" + ch, platform, label: cleanLabel });
       });
     } else {
-      items.push({ key: platform, platform, label: platform });
+      items.push({ key: platform, platform, label: null });
     }
   });
 
@@ -602,32 +870,13 @@ function buildRows() {
     badge.className = "badge " + it.platform;
     badge.innerHTML = ICONS[it.platform];
 
-    const info = document.createElement("div");
-    info.className = "info";
-
-    const countLine = document.createElement("div");
-    countLine.className = "count-line";
-    const dot = document.createElement("span");
-    dot.className = "live-dot";
-    const count = document.createElement("span");
-    count.className = "count";
-    count.textContent = "—";
-    countLine.appendChild(dot);
-    countLine.appendChild(count);
-    info.appendChild(countLine);
-
-    if (settings.mode === "each") {
-      const label = document.createElement("span");
-      label.className = "label";
-      label.textContent = it.label;
-      info.appendChild(label);
-    }
+    const made = makeInfo(it.label);
 
     row.appendChild(badge);
-    row.appendChild(info);
+    row.appendChild(made.info);
     widget.appendChild(row);
 
-    rowEls[it.key] = { count, rowEl: row, valueShown: 0 };
+    rowEls[it.key] = { count: made.count, rowEl: row, valueShown: 0 };
   });
 
   built = true;
@@ -662,6 +911,39 @@ function updateCell(cell, value, isLive, hasError) {
 function applyData(data) {
   if (!built) buildRows();
 
+  // MODO TOTAL: soma TODOS os canais de TODAS as plataformas numa linha só
+  if (settings.mode === "total") {
+    const cell = rowEls["__total__"];
+    if (!cell) return;
+    let total = 0;
+    let anyLive = false;
+    let resultCount = 0;
+    let errorCount = 0;
+    PLATFORMS.forEach((platform) => {
+      const results = data[platform] || [];
+      let platformLive = false;
+      results.forEach((r) => {
+        resultCount++;
+        if (r.error) errorCount++;
+        if (r.live && r.viewers != null) {
+          total += r.viewers || 0;
+          anyLive = true;
+          platformLive = true;
+        }
+      });
+      // com hideoffline=1, esconde o ícone da plataforma que não tem
+      // nenhum canal ao vivo no momento
+      if (settings.hideOffline && cell.badges && cell.badges[platform]) {
+        cell.badges[platform].style.display = platformLive ? "" : "none";
+      }
+    });
+    // só trata como erro se TODOS os canais deram erro
+    const allError = resultCount > 0 && errorCount === resultCount;
+    updateCell(cell, total, anyLive, allError);
+    return;
+  }
+
+  // MODOS SUM / EACH
   PLATFORMS.forEach((platform) => {
     const results = data[platform] || [];
     if (!results.length) return;
@@ -703,16 +985,318 @@ async function poll() {
   }
 }
 
+/* =================================================================
+   WIZARD DE CONFIGURAÇÃO
+   Aparece quando nenhum canal foi configurado, ou quando a URL tem
+   ?setup=1. Monta a URL pronta pro OBS a partir de um formulário.
+   ================================================================= */
+function escapeAttr(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;");
+}
+
+function showWizard() {
+  widget.style.display = "none";
+  const old = document.getElementById("wizard");
+  if (old) old.remove();
+
+  // valores iniciais — o que veio na URL (útil ao abrir com ?setup=1)
+  const init = {
+    twitch: (channels.twitch || []).join(", "),
+    youtube: (channels.youtube || []).join(", "),
+    kick: (channels.kick || []).join(", "),
+    mode: settings.mode,
+    layout: settings.layout,
+    pos: settings.position,
+    poll: settings.poll,
+    bg: settings.bg,
+    compact: settings.compact,
+    hideoffline: settings.hideOffline,
+  };
+
+  const w = document.createElement("div");
+  w.id = "wizard";
+  w.innerHTML =
+    '<h1>Configurar overlay</h1>' +
+    '<div class="sub">Preencha os campos e copie o link pra usar no OBS.</div>' +
+    '<div class="group">' +
+    '  <div class="group-title">Canais</div>' +
+    '  <div class="field"><label>Twitch</label>' +
+    '    <input type="text" id="wz-twitch" placeholder="canal1, canal2" value="' +
+    escapeAttr(init.twitch) +
+    '">' +
+    '    <div class="hintline">login do canal — separe vários por vírgula</div></div>' +
+    '  <div class="field"><label>YouTube</label>' +
+    '    <input type="text" id="wz-youtube" placeholder="@canal, UCxxxx, v:VIDEO_ID" value="' +
+    escapeAttr(init.youtube) +
+    '">' +
+    '    <div class="hintline">handle (@nome), channelId (UC...) ou v:ID do vídeo da live</div></div>' +
+    '  <div class="field"><label>Kick</label>' +
+    '    <input type="text" id="wz-kick" placeholder="canal1, canal2" value="' +
+    escapeAttr(init.kick) +
+    '">' +
+    '    <div class="hintline">slug do canal — separe vários por vírgula</div></div>' +
+    '</div>' +
+    '<div class="group">' +
+    '  <div class="group-title">Aparência</div>' +
+    '  <div class="row2">' +
+    '    <div class="field"><label>Modo</label>' +
+    '      <select id="wz-mode">' +
+    '        <option value="sum">Soma por plataforma</option>' +
+    '        <option value="each">Um por canal</option>' +
+    '        <option value="total">Soma geral (1 linha)</option>' +
+    '      </select></div>' +
+    '    <div class="field"><label>Layout</label>' +
+    '      <select id="wz-layout">' +
+    '        <option value="vertical">Vertical</option>' +
+    '        <option value="horizontal">Horizontal</option>' +
+    '      </select></div>' +
+    '  </div>' +
+    '  <div class="row2">' +
+    '    <div class="field"><label>Posição</label>' +
+    '      <select id="wz-pos">' +
+    '        <option value="top-left">Superior esquerdo</option>' +
+    '        <option value="top-right">Superior direito</option>' +
+    '        <option value="bottom-left">Inferior esquerdo</option>' +
+    '        <option value="bottom-right">Inferior direito</option>' +
+    '      </select></div>' +
+    '    <div class="field"><label>Atualizar (s)</label>' +
+    '      <input type="number" id="wz-poll" min="5" value="' +
+    init.poll +
+    '"></div>' +
+    '  </div>' +
+    '  <div class="field"><label>Opacidade do fundo</label>' +
+    '    <div class="slider-row">' +
+    '      <input type="range" id="wz-bg" min="0" max="100" value="' +
+    init.bg +
+    '">' +
+    '      <span class="slider-val" id="wz-bg-val">' +
+    init.bg +
+    '%</span>' +
+    '    </div></div>' +
+    '  <label class="check"><input type="checkbox" id="wz-compact"> Números compactos (1,2 mil)</label>' +
+    '  <label class="check"><input type="checkbox" id="wz-hideoffline"> Esconder quem está offline</label>' +
+    '</div>' +
+    '<div class="group">' +
+    '  <div class="group-title">Prévia</div>' +
+    '  <div class="preview-stage" id="wz-preview"></div>' +
+    '  <div class="preview-caption">Prévia com dados de exemplo (todos online)</div>' +
+    '</div>' +
+    '<div class="group">' +
+    '  <div class="group-title">Link gerado</div>' +
+    '  <div class="out" id="wz-out"></div>' +
+    '</div>' +
+    '<div class="btns">' +
+    '  <button class="ghost" id="wz-copy">Copiar link</button>' +
+    '  <button class="primary" id="wz-open">Abrir overlay</button>' +
+    '</div>' +
+    '<div class="copied" id="wz-copied"></div>';
+  document.body.appendChild(w);
+
+  const $ = (id) => document.getElementById(id);
+
+  // selects e checkboxes não pegam valor via atributo value
+  $("wz-mode").value = init.mode;
+  $("wz-layout").value = init.layout;
+  $("wz-pos").value = init.pos;
+  $("wz-compact").checked = init.compact;
+  $("wz-hideoffline").checked = init.hideoffline;
+
+  function norm(s) {
+    return s.split(",").map((x) => x.trim()).filter(Boolean).join(",");
+  }
+
+  function buildUrl() {
+    // monta o query string na mão pra sair limpo (sem %2C, %40 etc.) —
+    // nomes de canal só usam caracteres válidos em query string
+    const parts = [];
+    const tw = norm($("wz-twitch").value.trim());
+    const yt = norm($("wz-youtube").value.trim());
+    const kk = norm($("wz-kick").value.trim());
+    if (tw) parts.push("twitch=" + tw);
+    if (yt) parts.push("youtube=" + yt);
+    if (kk) parts.push("kick=" + kk);
+
+    const mode = $("wz-mode").value;
+    const layout = $("wz-layout").value;
+    const pos = $("wz-pos").value;
+    const poll = parseInt($("wz-poll").value, 10);
+    const bg = parseInt($("wz-bg").value, 10);
+
+    // só inclui o que for diferente do padrão (mantém a URL curta)
+    if (mode !== "sum") parts.push("mode=" + mode);
+    if (layout !== "vertical") parts.push("layout=" + layout);
+    if (pos !== "top-left") parts.push("pos=" + pos);
+    if (!isNaN(poll) && poll !== CONFIG.pollInterval)
+      parts.push("poll=" + Math.max(5, poll));
+    if (!isNaN(bg) && bg !== CONFIG.bgOpacity) parts.push("bg=" + bg);
+    if ($("wz-compact").checked) parts.push("compact=1");
+    if ($("wz-hideoffline").checked) parts.push("hideoffline=1");
+
+    const base = location.origin + location.pathname;
+    return parts.length ? base + "?" + parts.join("&") : base;
+  }
+
+  // ----- prévia ao vivo com dados de exemplo -----
+  function fakeCount(name) {
+    // número fake estável por nome de canal (não muda enquanto digita)
+    let h = 0;
+    for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+    return 40 + (h % 4800); // 40..4839
+  }
+
+  function renderPreview() {
+    const stage = $("wz-preview");
+    if (!stage) return;
+    stage.innerHTML = "";
+
+    const mode = $("wz-mode").value;
+    const layout = $("wz-layout").value;
+    const pos = $("wz-pos").value;
+    const compact = $("wz-compact").checked;
+    const bg = parseInt($("wz-bg").value, 10);
+
+    // canais do formulário; se tudo vazio, usa um conjunto de exemplo
+    let pc = {
+      twitch: norm($("wz-twitch").value).split(",").filter(Boolean),
+      youtube: norm($("wz-youtube").value).split(",").filter(Boolean),
+      kick: norm($("wz-kick").value).split(",").filter(Boolean),
+    };
+    if (!PLATFORMS.some((p) => pc[p].length)) {
+      pc = { twitch: ["twitch"], youtube: ["youtube"], kick: ["kick"] };
+    }
+    const active = PLATFORMS.filter((p) => pc[p].length);
+
+    const fmtN = (n) =>
+      compact
+        ? new Intl.NumberFormat("pt-BR", {
+            notation: "compact",
+            maximumFractionDigits: 1,
+          }).format(n)
+        : new Intl.NumberFormat("pt-BR").format(n);
+
+    const card = document.createElement("div");
+    card.className = "preview-card layout-" + layout + " ppos-" + pos;
+    // aplica o fundo com a opacidade do slider. Monta o rgba() COMPLETO
+    // no JS (sem var() aninhado) e seta direto no background — assim não
+    // depende de como o navegador resolve variável CSS dentro de variável.
+    const bgRgb =
+      (getComputedStyle(document.documentElement).getPropertyValue("--bg-rgb") ||
+        "14, 15, 20").trim();
+    card.style.background =
+      "rgba(" + bgRgb + ", " + (isNaN(bg) ? 78 : bg) / 100 + ")";
+
+    function makeRow(badgesHtml, numberText, labelText) {
+      const row = document.createElement("div");
+      row.className = "row";
+      row.style.cssText = "opacity:1;transform:none;animation:none";
+      const wrap = document.createElement("div");
+      wrap.innerHTML = badgesHtml;
+      while (wrap.firstChild) row.appendChild(wrap.firstChild);
+      const info = document.createElement("div");
+      info.className = "info";
+      const cl = document.createElement("div");
+      cl.className = "count-line";
+      const dot = document.createElement("span");
+      dot.className = "live-dot";
+      const cnt = document.createElement("span");
+      cnt.className = "count";
+      cnt.textContent = numberText;
+      cl.appendChild(dot);
+      cl.appendChild(cnt);
+      info.appendChild(cl);
+      if (labelText != null) {
+        const lb = document.createElement("span");
+        lb.className = "label";
+        lb.textContent = labelText;
+        info.appendChild(lb);
+      }
+      row.appendChild(info);
+      return row;
+    }
+
+    const badgeHtml = (p) => '<div class="badge ' + p + '">' + ICONS[p] + "</div>";
+
+    if (mode === "total") {
+      let total = 0;
+      active.forEach((p) => pc[p].forEach((c) => (total += fakeCount(c))));
+      const group =
+        '<div class="badge-group">' + active.map(badgeHtml).join("") + "</div>";
+      card.appendChild(makeRow(group, fmtN(total), null));
+    } else if (mode === "each") {
+      active.forEach((p) => {
+        pc[p].forEach((c) => {
+          const label = c.replace(/^v:/, "").replace(/^@/, "");
+          card.appendChild(makeRow(badgeHtml(p), fmtN(fakeCount(c)), label));
+        });
+      });
+    } else {
+      // sum
+      active.forEach((p) => {
+        let total = 0;
+        pc[p].forEach((c) => (total += fakeCount(c)));
+        card.appendChild(makeRow(badgeHtml(p), fmtN(total), null));
+      });
+    }
+
+    stage.appendChild(card);
+  }
+
+  function refresh() {
+    $("wz-bg-val").textContent = $("wz-bg").value + "%";
+    $("wz-out").textContent = buildUrl();
+    $("wz-copied").textContent = "";
+    renderPreview();
+  }
+
+  w.querySelectorAll("input, select").forEach((el) => {
+    el.addEventListener("input", refresh);
+    el.addEventListener("change", refresh);
+  });
+  refresh();
+
+  $("wz-copy").addEventListener("click", async () => {
+    const url = buildUrl();
+    try {
+      await navigator.clipboard.writeText(url);
+      $("wz-copied").textContent = "Link copiado!";
+    } catch (e) {
+      // fallback: seleciona o texto do link pro usuário copiar manual
+      const out = $("wz-out");
+      const range = document.createRange();
+      range.selectNodeContents(out);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      try {
+        document.execCommand("copy");
+        $("wz-copied").textContent = "Link copiado!";
+      } catch (e2) {
+        $("wz-copied").textContent = "Não consegui copiar — selecione o link acima.";
+      }
+    }
+  });
+
+  $("wz-open").addEventListener("click", () => {
+    const url = buildUrl();
+    if (!/[?&](twitch|youtube|kick)=/.test(url)) {
+      $("wz-copied").textContent = "Adicione pelo menos um canal antes de abrir.";
+      return;
+    }
+    location.href = url;
+  });
+}
+
 function start() {
   const total = PLATFORMS.reduce(
     (s, p) => s + (channels[p] ? channels[p].length : 0),
     0
   );
-  if (total === 0) {
-    showHint(
-      "Nenhum canal configurado.<br>Adicione na URL, ex.:<br>" +
-        "<b>?twitch=canal&youtube=@canal&kick=canal</b>"
-    );
+  // sem nenhum canal, ou ?setup=1 na URL -> abre o wizard de configuração
+  if (total === 0 || params.get("setup") === "1") {
+    showWizard();
     return;
   }
   poll();
