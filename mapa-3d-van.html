@@ -669,6 +669,30 @@
             if (!res.ok) throw new Error('HTTP ' + res.status);
             const text = await res.text();
             const data = this._extractData(text);
+            // API às vezes retorna heading=null. Estratégia em camadas:
+            // 1. Se há heading válido → cacheia e usa.
+            // 2. Se null mas tem cache → reusa o último válido.
+            // 3. Se null sem cache mas temos GPS anterior diferente → computa
+            //    heading do delta entre os dois pontos (atan2 lng/lat).
+            // 4. Fallback final: 0 (norte). Garante que a van não fique parada
+            //    eternamente quando API só manda null. Quando vier heading real,
+            //    a próxima Directions corrige automaticamente.
+            if (data.heading != null) {
+              this._lastHeading = data.heading;
+            } else if (this._lastHeading != null) {
+              data.heading = this._lastHeading;
+            } else if (this.lastGood) {
+              const dLng = data.lng - this.lastGood.lng;
+              const dLat = data.lat - this.lastGood.lat;
+              if (Math.abs(dLng) > 1e-5 || Math.abs(dLat) > 1e-5) {
+                data.heading = Math.atan2(dLng, dLat) * 180 / Math.PI;
+                this._lastHeading = data.heading;
+              } else {
+                data.heading = 0;
+              }
+            } else {
+              data.heading = 0;
+            }
             this.lastGood = data;
             const age = data.updatedAt ? Date.now() - new Date(data.updatedAt).getTime() : 0;
             this._setStatus(age > this.config.staleThreshold ? 'stale' : 'live');
